@@ -1,0 +1,50 @@
+---
+- name: Download and run the RKE2 server install script
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -sfL https://get.rke2.io | \
+      INSTALL_RKE2_CHANNEL={{ rke2_channel }} INSTALL_RKE2_TYPE=server sh -
+  args:
+    executable: /bin/bash
+    creates: /usr/local/bin/rke2
+
+- name: Enable and start rke2-server
+  ansible.builtin.systemd:
+    name: rke2-server
+    enabled: true
+    state: started
+
+- name: Wait for the admin kubeconfig to be written
+  ansible.builtin.wait_for:
+    path: /etc/rancher/rke2/rke2.yaml
+    timeout: 300
+
+- name: Wait for the node token to be written
+  ansible.builtin.wait_for:
+    path: /var/lib/rancher/rke2/server/node-token
+    timeout: 300
+
+- name: Read the node token
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/rke2/server/node-token
+  register: node_token_raw
+
+- name: Store the node token as a fact (used by the worker play via hostvars)
+  ansible.builtin.set_fact:
+    node_token: "{{ (node_token_raw.content | b64decode).strip() }}"
+
+- name: Drop a profile.d snippet with PATH/KUBECONFIG for interactive sessions
+  ansible.builtin.copy:
+    dest: /etc/profile.d/rke2.sh
+    mode: "0644"
+    content: |
+      export PATH="$PATH:/var/lib/rancher/rke2/bin"
+      export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+
+- name: Fetch the kubeconfig to the local machine
+  # RKE2 defaults the kubeconfig's server field to https://127.0.0.1:6443, which already
+  # matches the `make tunnel` SSM port-forward workflow — no rewriting needed.
+  ansible.builtin.fetch:
+    src: /etc/rancher/rke2/rke2.yaml
+    dest: "{{ kubeconfig_local_path }}"
+    flat: true

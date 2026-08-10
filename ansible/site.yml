@@ -1,0 +1,15 @@
+---
+- name: Common setup on all nodes
+  hosts: all
+  roles:
+    - rke2_common
+
+- name: Install and start RKE2 server (control plane)
+  hosts: control
+  roles:
+    - rke2_server
+
+- name: Install and start RKE2 agent (worker), joining the control plane
+  hosts: worker
+  roles:
+    - rke2_agent

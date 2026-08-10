@@ -1,0 +1,31 @@
+---
+- name: Download and run the RKE2 agent install script
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -sfL https://get.rke2.io | \
+      INSTALL_RKE2_CHANNEL={{ rke2_channel }} INSTALL_RKE2_TYPE=agent sh -
+  args:
+    executable: /bin/bash
+    creates: /usr/local/bin/rke2
+
+- name: Ensure /etc/rancher/rke2 exists
+  ansible.builtin.file:
+    path: /etc/rancher/rke2
+    state: directory
+    mode: "0755"
+
+- name: Write agent config (server URL + join token)
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/rke2/config.yaml
+    mode: "0600"
+  notify: Restart rke2-agent
+
+- name: Enable and start rke2-agent
+  ansible.builtin.systemd:
+    name: rke2-agent
+    enabled: true
+    state: started
+
+- name: Flush handlers so a config change takes effect immediately
+  ansible.builtin.meta: flush_handlers

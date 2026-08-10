@@ -1,0 +1,21 @@
+---
+# Dynamic inventory for the RKE2 lab nodes. Requires AWS_PROFILE and AWS_REGION to be exported
+# in the environment (the Makefile does this for you from `terraform output`).
+plugin: amazon.aws.aws_ec2
+
+regions:
+  - "{{ lookup('env', 'AWS_REGION') }}"
+
+profile: "{{ lookup('env', 'AWS_PROFILE') }}"
+
+filters:
+  tag:Project: "{{ lookup('env', 'RKE2_CLUSTER_NAME') | default('rke2-lab', true) }}"
+  instance-state-name: running
+
+keyed_groups:
+  - key: ec2_tags.Role
+    separator: ""
+
+compose:
+  ansible_host: instance_id
+  ansible_connection: "'community.aws.aws_ssm'"

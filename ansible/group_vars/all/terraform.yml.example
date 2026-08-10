@@ -1,0 +1,9 @@
+# This file is generated automatically by `terraform apply` (see terraform/main.tf,
+# resource local_file.ansible_terraform_vars) and written to group_vars/all/terraform.yml.
+# It's shown here as an example of its shape; the real file is gitignored.
+aws_profile: your-sso-profile
+aws_region: eu-west-1
+cluster_name: rke2-lab
+ssm_bucket_name: rke2-lab-ssm-123456789012
+control_instance_id: i-0123456789abcdef0
+control_private_ip: 10.0.1.23

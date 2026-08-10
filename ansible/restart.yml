@@ -1,0 +1,67 @@
+---
+# Restarts the RKE2 service on each node and waits for it to report Ready again.
+# Run against everything, or scope to one node type:
+#   make restart
+#   make restart LIMIT=control
+#   make restart LIMIT=worker
+
+- name: Restart rke2-server on the control node and confirm recovery
+  hosts: control
+  tasks:
+    - name: Restart rke2-server
+      become: true
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: restarted
+
+    - name: Wait for the Kubernetes API to accept connections again
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6443
+        timeout: 120
+
+    - name: Wait for this node to report Ready
+      become: true
+      ansible.builtin.command:
+        argv:
+          - /var/lib/rancher/rke2/bin/kubectl
+          - --kubeconfig
+          - /etc/rancher/rke2/rke2.yaml
+          - get
+          - node
+          - "{{ ansible_hostname }}"
+          - -o
+          - jsonpath={.status.conditions[?(@.type=="Ready")].status}
+      register: control_ready
+      until: control_ready.stdout == "True"
+      retries: 24
+      delay: 5
+      changed_when: false
+
+- name: Restart rke2-agent on the worker node and confirm recovery
+  hosts: worker
+  tasks:
+    - name: Restart rke2-agent
+      become: true
+      ansible.builtin.systemd:
+        name: rke2-agent
+        state: restarted
+
+    - name: Wait for this node to report Ready (checked from the control node)
+      become: true
+      ansible.builtin.command:
+        argv:
+          - /var/lib/rancher/rke2/bin/kubectl
+          - --kubeconfig
+          - /etc/rancher/rke2/rke2.yaml
+          - get
+          - node
+          - "{{ ansible_hostname }}"
+          - -o
+          - jsonpath={.status.conditions[?(@.type=="Ready")].status}
+      register: worker_ready
+      until: worker_ready.stdout == "True"
+      retries: 24
+      delay: 5
+      changed_when: false
+      delegate_to: "{{ groups['control'][0] }}"

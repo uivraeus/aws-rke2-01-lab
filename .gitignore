@@ -1,0 +1,16 @@
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.*
+terraform/terraform.tfvars
+terraform/*.tfplan
+crash.log
+
+# Ansible
+ansible/group_vars/all/terraform.yml
+ansible/*.retry
+ansible/.ansible/
+
+# Generated cluster access
+kubeconfig
+/kubectl

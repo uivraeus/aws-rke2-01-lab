@@ -1,0 +1,2 @@
+server: https://{{ control_private_ip }}:{{ rke2_supervisor_port }}
+token: {{ hostvars[groups['control'][0]]['node_token'] }}

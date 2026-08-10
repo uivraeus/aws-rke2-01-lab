@@ -1,0 +1,13 @@
+---
+- name: Wait for the SSM agent / instance to be reachable
+  ansible.builtin.wait_for_connection:
+    timeout: 180
+
+- name: Gather facts
+  ansible.builtin.setup:
+
+- name: Ensure /usr/local/bin is on PATH for become sessions (needed by the rke2 installer)
+  ansible.builtin.lineinfile:
+    path: /etc/environment
+    regexp: '^PATH='
+    line: 'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/var/lib/rancher/rke2/bin"'
