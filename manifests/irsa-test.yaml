@@ -1,0 +1,69 @@
+# Manual IRSA verification manifests - no pod-identity webhook involved.
+#
+# Normally a webhook (e.g. amazon-eks-pod-identity-webhook) injects the
+# projected token volume and AWS_ROLE_ARN/AWS_WEB_IDENTITY_TOKEN_FILE env vars
+# into any pod using an annotated ServiceAccount. Since that's not installed
+# here, this manifest does the same thing by hand so the aws-cli container's
+# default credential chain picks them up exactly as it would with the webhook.
+#
+# Fill in the placeholders below from Terraform, then apply against the
+# cluster (open `make tunnel` in another shell first):
+#
+#   export IRSA_ROLE_ARN=$(terraform -chdir=terraform output -raw irsa_role_arn)
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw irsa_test_bucket_name)
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst < manifests/irsa-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#
+# irsa-test namespace/serviceaccount names below must match var.irsa_namespace
+# / var.irsa_service_account_name (defaults: "irsa-test" / "irsa-test") -
+# they're baked into the IAM role's trust policy condition.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: irsa-test
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: irsa-test
+  namespace: irsa-test
+  annotations:
+    # Not consumed by anything without the webhook installed, but kept so the
+    # ServiceAccount is ready for it later without further changes.
+    eks.amazonaws.com/role-arn: ${IRSA_ROLE_ARN}
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: irsa-test
+  namespace: irsa-test
+spec:
+  serviceAccountName: irsa-test
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: AWS_ROLE_ARN
+          value: ${IRSA_ROLE_ARN}
+        - name: AWS_WEB_IDENTITY_TOKEN_FILE
+          value: /var/run/secrets/eks.amazonaws.com/serviceaccount/token
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}
+      volumeMounts:
+        - name: aws-iam-token
+          mountPath: /var/run/secrets/eks.amazonaws.com/serviceaccount
+          readOnly: true
+  volumes:
+    - name: aws-iam-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              audience: sts.amazonaws.com
+              expirationSeconds: 3600

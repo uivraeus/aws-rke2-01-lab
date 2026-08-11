@@ -8,6 +8,22 @@
     executable: /bin/bash
     creates: /usr/local/bin/rke2
 
+- name: Ensure /etc/rancher/rke2 exists
+  ansible.builtin.file:
+    path: /etc/rancher/rke2
+    state: directory
+    mode: "0755"
+
+- name: Write server config (IRSA issuer/jwks kube-apiserver-arg)
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/rke2/config.yaml
+    mode: "0600"
+  notify: Restart rke2-server
+
+- name: Flush handlers so a config change on an already-running server takes effect now
+  ansible.builtin.meta: flush_handlers
+
 - name: Enable and start rke2-server
   ansible.builtin.systemd:
     name: rke2-server
@@ -48,3 +64,81 @@
     src: /etc/rancher/rke2/rke2.yaml
     dest: "{{ kubeconfig_local_path }}"
     flat: true
+
+# --- IRSA: mirror the live OIDC discovery doc/JWKS into the OIDC bucket ---
+#
+# RKE2 sets --anonymous-auth=false on kube-apiserver by default, so an unauthenticated
+# GET against these paths is rejected with 401 before RBAC (e.g.
+# system:public-info-viewer) is even consulted. Going through the admin kubeconfig's
+# `kubectl get --raw` instead authenticates as system:masters, which bypasses RBAC
+# entirely - the response already reflects whatever --service-account-issuer/
+# --service-account-jwks-uri config.yaml.j2 set above, so what's fetched here is
+# exactly what needs to be re-published for AWS STS to see. Runs unconditionally (not
+# creates-guarded) - re-running `make sync-oidc` after e.g. a service-account signing
+# key rotation is the intended way to refresh the mirror.
+
+- name: Fetch the live OIDC discovery document from kube-apiserver
+  ansible.builtin.command:
+    argv:
+      - /var/lib/rancher/rke2/bin/kubectl
+      - --kubeconfig
+      - /etc/rancher/rke2/rke2.yaml
+      - get
+      - --raw
+      - /.well-known/openid-configuration
+  register: oidc_discovery
+  changed_when: false
+  tags: [oidc_sync]
+
+- name: Fetch the live JWKS from kube-apiserver
+  ansible.builtin.command:
+    argv:
+      - /var/lib/rancher/rke2/bin/kubectl
+      - --kubeconfig
+      - /etc/rancher/rke2/rke2.yaml
+      - get
+      - --raw
+      - /openid/v1/jwks
+  register: oidc_jwks
+  changed_when: false
+  tags: [oidc_sync]
+
+- name: Mirror the OIDC discovery document to the OIDC bucket
+  amazon.aws.s3_object:
+    mode: put
+    profile: "{{ aws_profile }}"
+    region: "{{ aws_region }}"
+    bucket: "{{ oidc_bucket_name }}"
+    object: "{{ cluster_name }}/.well-known/openid-configuration"
+    content: "{{ oidc_discovery.stdout }}"
+    headers:
+      Content-Type: application/json
+  delegate_to: localhost
+  become: false
+  # `become: false` alone doesn't reliably stop a delegated-to-localhost task from
+  # inheriting the play's ansible_become=true (a known Ansible quirk), so it still runs
+  # as root with HOME=/root - forcing HOME back to the invoking operator's actual value
+  # is what makes boto3 find their ~/.aws/config profile.
+  environment:
+    HOME: "{{ lookup('env', 'HOME') }}"
+  tags: [oidc_sync]
+
+- name: Mirror the JWKS to the OIDC bucket
+  amazon.aws.s3_object:
+    mode: put
+    profile: "{{ aws_profile }}"
+    region: "{{ aws_region }}"
+    bucket: "{{ oidc_bucket_name }}"
+    object: "{{ cluster_name }}/keys.json"
+    content: "{{ oidc_jwks.stdout }}"
+    headers:
+      Content-Type: application/json
+  delegate_to: localhost
+  become: false
+  # `become: false` alone doesn't reliably stop a delegated-to-localhost task from
+  # inheriting the play's ansible_become=true (a known Ansible quirk), so it still runs
+  # as root with HOME=/root - forcing HOME back to the invoking operator's actual value
+  # is what makes boto3 find their ~/.aws/config profile.
+  environment:
+    HOME: "{{ lookup('env', 'HOME') }}"
+  tags: [oidc_sync]

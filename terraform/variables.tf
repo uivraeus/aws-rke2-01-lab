@@ -31,3 +31,15 @@ variable "root_volume_size" {
   type        = number
   default     = 20
 }
+
+variable "irsa_namespace" {
+  description = "Kubernetes namespace of the service account used to verify IRSA."
+  type        = string
+  default     = "irsa-test"
+}
+
+variable "irsa_service_account_name" {
+  description = "Kubernetes service account name used to verify IRSA."
+  type        = string
+  default     = "irsa-test"
+}

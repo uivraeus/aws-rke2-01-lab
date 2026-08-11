@@ -141,5 +141,8 @@ resource "local_file" "ansible_terraform_vars" {
     ssm_bucket_name     = aws_s3_bucket.ssm_transfer.bucket
     control_instance_id = aws_instance.control.id
     control_private_ip  = aws_instance.control.private_ip
+    oidc_bucket_name    = aws_s3_bucket.oidc.bucket
+    oidc_issuer_url     = local.oidc_issuer_url
+    oidc_jwks_uri       = "${local.oidc_issuer_url}/keys.json"
   })
 }
