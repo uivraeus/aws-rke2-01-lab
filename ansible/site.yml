@@ -1,6 +1,11 @@
 ---
 - name: Common setup on all nodes
   hosts: all
+  # rke2_common waits for the SSM connection to actually work before gathering facts
+  # itself (freshly-launched instances' SSM Agent can take a bit to register) - the
+  # automatic implicit fact-gathering Ansible normally runs at the start of every play
+  # would otherwise try to connect immediately and defeat that wait.
+  gather_facts: false
   roles:
     - rke2_common
 
