@@ -1,7 +1,7 @@
 TF_DIR := terraform
 ANSIBLE_DIR := ansible
 
-.PHONY: init fmt validate plan apply ansible-deps ansible bootstrap restart reboot sync-oidc tunnel destroy
+.PHONY: init fmt validate plan apply ansible-deps ansible bootstrap restart reboot sync-oidc rotate-sa-key tunnel destroy
 
 init:
 	cd $(TF_DIR) && terraform init
@@ -71,6 +71,19 @@ sync-oidc:
 	AWS_REGION=$$(terraform -chdir=../$(TF_DIR) output -raw aws_region) \
 	RKE2_CLUSTER_NAME=$$(terraform -chdir=../$(TF_DIR) output -raw cluster_name) \
 	ansible-playbook site.yml --tags oidc_sync
+
+# Rotates the RKE2 service-account signing key per the documented procedure
+# (https://docs.rke2.io/security/certificates) and verifies the outcome: the old key
+# stays valid for already-issued tokens, and a freshly-issued token gets signed with
+# the new key. Not part of the IRSA solution itself - a way to confirm RKE2's rotation
+# behavior matches its docs. If this cluster is wired up for IRSA, follow up with
+# `make sync-oidc`.
+rotate-sa-key:
+	cd $(ANSIBLE_DIR) && \
+	AWS_PROFILE=$$(terraform -chdir=../$(TF_DIR) output -raw aws_profile) \
+	AWS_REGION=$$(terraform -chdir=../$(TF_DIR) output -raw aws_region) \
+	RKE2_CLUSTER_NAME=$$(terraform -chdir=../$(TF_DIR) output -raw cluster_name) \
+	ansible-playbook rotate_service_account_key.yml
 
 # Opens an SSM port-forward tunnel so `kubectl --kubeconfig kubeconfig` works from your laptop.
 # Run this in its own shell and leave it running.

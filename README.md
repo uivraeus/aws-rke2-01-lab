@@ -185,6 +185,31 @@ match automatically, so this is self-consistent within this repo. It only
 bites if something *outside* this Terraform (e.g. a role created by hand in
 the AWS console) references the old issuer URL or provider ARN directly.
 
+## Verifying RKE2's service-account key rotation (not IRSA-specific)
+
+Unrelated to IRSA itself, but exercising exactly the "signing key rotation"
+scenario `make sync-oidc` exists to recover from:
+
+```sh
+make rotate-sa-key
+```
+
+This runs
+[ansible/rotate_service_account_key.yml](ansible/rotate_service_account_key.yml),
+which performs
+[RKE2's documented `rotate-ca` procedure](https://docs.rke2.io/security/certificates)
+for the service-account signing key specifically (stage a new key + the
+current one into `/opt/rke2/server/tls`, `rke2 certificate rotate-ca`,
+restart `rke2-server`), then verifies the outcome against what the docs
+claim: the pre-rotation key is still present in the published JWKS (so
+already-issued tokens keep validating), and a freshly-requested token is
+signed with a new key. It asserts both, so a docs/behavior mismatch fails
+loudly instead of silently.
+
+If this cluster is wired up for IRSA, follow up with `make sync-oidc` -
+this playbook only rotates the live cluster's key, it doesn't touch the
+mirrored copy in S3.
+
 ## Tearing down
 
 ```sh
