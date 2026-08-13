@@ -58,17 +58,35 @@ make tunnel                                    # run in its own shell, leave it 
 kubectl --kubeconfig kubeconfig get nodes       # in another shell
 ```
 
-To get an interactive shell on either node (e.g. to `systemctl restart rke2-server`,
-`systemctl restart rke2-agent`, or reboot and watch it recover):
+To restart just the RKE2 service (and wait for the node to report `Ready` again):
+
+```sh
+make restart                # both nodes
+make restart LIMIT=control  # just the control node
+make restart LIMIT=worker   # just the worker node
+```
+
+To reboot the underlying EC2 instance(s) at the OS level instead:
+
+```sh
+make reboot                # both nodes
+make reboot LIMIT=control  # just the control node
+make reboot LIMIT=worker   # just the worker node
+```
+
+Both `rke2-server`/`rke2-agent` are enabled via systemd and RKE2's embedded etcd persists on
+the root volume, so service restarts and full instance reboots are expected to come back on
+their own - `make reboot` doesn't wait for that, so give it a minute or two and check with
+`kubectl get nodes`.
+
+For anything else, get an interactive shell on either node:
 
 ```sh
 aws ssm start-session --profile <your-profile> --target <instance-id>
 ```
 
 Instance IDs are in the `terraform output` (or the AWS console/CLI, tagged
-`Project=<cluster_name>`). Both services are enabled via systemd and RKE2's embedded etcd
-persists on the root volume, so service restarts and full instance reboots are expected to
-come back on their own.
+`Project=<cluster_name>`).
 
 ## IRSA (IAM Roles for Service Accounts)
 
