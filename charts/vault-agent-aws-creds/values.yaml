@@ -1,0 +1,37 @@
+# Namespace the ConfigMap is created in. ConfigMaps aren't cluster-scoped, so this
+# must match the namespace of any pod referencing it via agent-configmap. Defaults
+# to the release namespace if left unset.
+namespace: ""
+
+# ConfigMap name, referenced by pods via the vault.hashicorp.com/agent-configmap
+# annotation. Defaults to "<release-name>-vault-agent-aws-creds-config" if unset.
+#
+# If this chart is included more than once as an aliased dependency (Chart.yaml's
+# `alias:` mechanism - typically an app chart with several sub-services/pods, each
+# needing its own role and ConfigMap; a single pod needing more than one role works
+# the same way too), this MUST be set to a distinct value per alias: aliased subchart
+# instances share the same Release.Name, so the default alone will not disambiguate
+# them and later instances would silently overwrite earlier ones.
+configMapName: ""
+
+# Vault's own network address, e.g. "http://<vault_private_ip>:8200". Optional - this
+# chart assumes it's always used together with the Vault Agent Injector, which already
+# sets a VAULT_ADDR env var (from its own global.externalVaultAddr/injector config,
+# set once at injector-install time) on every container it mutates. Vault Agent falls
+# back to that env var when no `vault { address = ... }` stanza is present at all, so
+# leaving this unset (the default) omits the stanza and relies on the injector's
+# env var - confirmed live. Set it explicitly only to pin a release to a different
+# Vault address than the injector's own default.
+vaultAddress: ""
+
+# Vault Kubernetes auth method role name (auto_auth.method.kubernetes.config.role) -
+# authenticates the pod's own ServiceAccount token against Vault. Must already exist
+# in Vault (e.g. terraform-vault's vault_kubernetes_auth_backend_role).
+vaultAuthRole: ""
+
+# Vault AWS secrets engine role name. Becomes the `secret "aws/creds/<this>"` path
+# in the Consul-Template snippet that fetches credentials - this is the value that
+# should differ across aliased instances (different sub-service/pod, or a single pod
+# needing more than one role). Must already exist in Vault (e.g. terraform-vault's
+# vault_aws_secret_backend_role).
+awsSecretsRole: ""

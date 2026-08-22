@@ -492,6 +492,91 @@ by the file's inode changing across an edit - but that only protects each
 write individually, not the gap between two separate writes to the same
 path, which is the actual problem this restructuring solves.)
 
+#### Packaged as a Helm chart
+
+[charts/vault-agent-aws-creds](charts/vault-agent-aws-creds) wraps the exact
+same ConfigMap (the HCL/shell content is unchanged, only its packaging is
+different) as a reusable Helm chart, for when hand-editing
+`manifests/vault-agent-config.yaml` and `envsubst`-ing it stops scaling -
+e.g. an app's own chart wanting this as a proper `dependencies:` entry.
+Both approaches are kept in this repo side by side: the raw manifest above
+as the from-scratch reference (worth reading once to see exactly what an
+injector `agent-configmap` needs), the chart for actually consuming it.
+
+Two design points worth knowing before editing the chart:
+
+- The Consul-Template snippet and the shell `command` hook live as real
+  `.hcl`/`.sh` files under the chart's `files/` directory, included via
+  `.Files.Get` - deliberately **not** `tpl`'d, since the snippet's own
+  `{{ .Data.access_key }}` syntax would collide with Helm's identical
+  `{{ }}` delimiter if Helm tried to parse it as its own directive. The one
+  genuinely-variable piece inside that static file - the AWS secrets engine
+  role in `secret "aws/creds/<role>"` - is swapped in via a plain
+  placeholder token (`__AWS_SECRETS_ROLE__`) and Sprig's `replace`, the same
+  placeholder-substitution style already used for the epoch workaround
+  inside the snippet itself, not by templating the file's own content.
+- The chart is designed to be included more than once as an aliased
+  dependency (Helm's `alias:` in a parent `Chart.yaml`) - the expected case
+  is an application chart with several sub-services (several pods), each
+  needing its own AWS role; a single pod needing more than one role at once
+  is also possible the same way, just less common. Either way, each alias
+  gets its own `values` block (distinct `configMapName` and
+  `awsSecretsRole`) and renders its own independent ConfigMap. Confirmed
+  with a throwaway parent chart aliasing this one twice: two ConfigMaps,
+  two distinct `secret "aws/creds/<role>"` paths, no collision.
+- Like the raw manifest, this chart only handles the Kubernetes-side half
+  (the ConfigMap and its content) - it never creates the Vault auth
+  role/policy or the AWS IAM role, those are assumed to already exist
+  (`vaultAuthRole`/`awsSecretsRole` chart values reference them by name).
+- `vaultAddress` (the HCL `vault { address = ... }` stanza) is optional and
+  left unset by default - the chart assumes it's always used alongside the
+  Vault Agent Injector, which already sets a `VAULT_ADDR` env var (from its
+  own `global.externalVaultAddr`, set once at `make injector-vault` time) on
+  every container it mutates. Vault Agent falls back to that env var when
+  the stanza is absent entirely, so the default renders no `vault {}` block
+  at all rather than an empty one - confirmed live. Set `vaultAddress`
+  explicitly only to pin a release to a different Vault address than the
+  injector's own default.
+
+Validate offline first - no live cluster or Vault needed:
+
+```sh
+helm lint charts/vault-agent-aws-creds
+helm template test charts/vault-agent-aws-creds \
+  --set namespace=vault-test \
+  --set vaultAuthRole=vault-test \
+  --set awsSecretsRole=vault-test
+```
+
+Then install it in place of the `envsubst | kubectl apply` step above:
+
+```sh
+helm upgrade --install vault-agent-aws-creds-config charts/vault-agent-aws-creds \
+  --kubeconfig kubeconfig \
+  --namespace vault-test \
+  --set configMapName=vault-agent-aws-creds-config \
+  --set vaultAuthRole=vault-test \
+  --set awsSecretsRole=vault-test
+```
+
+then apply `manifests/vault-test-injector.yaml` as before - the pod's two
+annotations don't change; `agent-configmap` just points at whichever
+ConfigMap name the chart rendered. That's `configMapName` above, set
+explicitly to match the name `vault-test-injector.yaml` already has
+hardcoded in its `agent-configmap` annotation - left unset, the chart
+defaults to `<release-name>-vault-agent-aws-creds-config` instead (so with
+the release name used here, the unset default would double up to
+`vault-agent-aws-creds-config-vault-agent-aws-creds-config`).
+
+**Confirmed live** (2026-08-22, same cluster/Vault version as the
+hand-authored path above): chart-rendered credentials pass
+`aws sts get-caller-identity`, S3 access is scoped correctly in both
+directions (allowed on the vault-test bucket, denied on the IRSA one), and
+automatic rotation works identically to the hand-authored version -
+`AccessKeyId` changes after the lease TTL with the pod's restart count
+staying at `0`. Re-verified with `vaultAddress` unset entirely (the
+default): same result, `VAULT_ADDR` supplied by the injector alone.
+
 ### Not yet done
 
 - **TLS/PKI for Vault's own listener** - currently `tls_disable = 1`

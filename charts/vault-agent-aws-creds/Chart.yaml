@@ -1,0 +1,12 @@
+apiVersion: v2
+name: vault-agent-aws-creds
+description: >-
+  Shared Vault Agent Injector config (a ConfigMap referenced via
+  vault.hashicorp.com/agent-configmap) for Vault-issued, auto-rotating AWS
+  credentials delivered through credential_process. Kubernetes-side wiring
+  only - the referenced Vault Kubernetes auth role and AWS secrets engine
+  role must already exist (provisioned separately, e.g. via terraform-vault
+  in aws-rke2-01-lab); this chart never creates Vault or AWS resources.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

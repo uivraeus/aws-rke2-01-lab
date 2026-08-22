@@ -1,0 +1,56 @@
+# Renders the injector's agent-configmap convention: config-init.hcl (one-shot init
+# container) and config.hcl (long-running sidecar), picked apart by the injector
+# using those exact filenames and identical except exit_after_auth. See this repo's
+# README "Vault Agent Injector" section and manifests/vault-agent-config.yaml (the
+# hand-authored version this wraps) for the full design this replicates.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMapName | default (printf "%s-vault-agent-aws-creds-config" .Release.Name) }}
+  namespace: {{ .Values.namespace | default .Release.Namespace }}
+data:
+{{- range list (dict "file" "config-init.hcl" "exitAfterAuth" true) (dict "file" "config.hcl" "exitAfterAuth" false) }}
+  {{ .file }}: |
+    exit_after_auth = {{ .exitAfterAuth }}
+    pid_file = "/home/vault/.pid"
+
+    auto_auth {
+      method "kubernetes" {
+        config = {
+          role = "{{ $.Values.vaultAuthRole }}"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/home/vault/.vault-token"
+        }
+      }
+    }
+
+    {{- if $.Values.vaultAddress }}
+    vault {
+      address = "{{ $.Values.vaultAddress }}"
+    }
+    {{- end }}
+
+    template {
+      destination = "/vault/secrets/aws-creds-raw"
+      contents = <<EOT
+{{ $.Files.Get "files/aws-creds.tpl.hcl" | replace "__AWS_SECRETS_ROLE__" $.Values.awsSecretsRole | trimSuffix "\n" | indent 4 }}
+    EOT
+      command = <<EOT
+    sh -c '
+{{ $.Files.Get "files/rotate-creds.sh" | trimSuffix "\n" | indent 4 }}
+    '
+    EOT
+    }
+
+    template {
+      destination = "/vault/secrets/aws-config"
+      contents = <<EOT
+    [default]
+    credential_process = cat /vault/secrets/aws-creds
+    EOT
+    }
+{{- end }}
