@@ -454,8 +454,8 @@ automatically, pod restart count stayed at `0`, and the new credentials
 worked immediately - the actual point of all of this.
 
 **Vault Agent template caveat, confirmed live**: this Vault Agent build
-(chart `hashicorp/vault` 0.34.1, app version 2.0.4) has no
-date-formatting or Sprig functions registered - despite general Consul
+(chart `hashicorp/vault` 0.34.1, app version 2.0.4) has no date-formatting
+functions registered (bare or `sprig_`-prefixed) - despite general Consul
 Template docs describing `sprig_*`-prefixed functions as available, every
 one tried (`sprig_now`, `sprig_date`, `timeAdd`) errored as undefined
 against this actual cluster. `manifests/vault-agent-config.yaml` works
@@ -466,6 +466,13 @@ RFC3339 with `date`/`sed`, both present in the sidecar's own image. If a
 future chart version registers these functions, the workaround could be
 replaced with a template one-liner - and since it's now confined to the
 shared ConfigMap, that'd be a one-place fix instead of a per-pod one.
+[docs/vault-agent-template-functions.md](docs/vault-agent-template-functions.md)
+traces this to its root cause (Consul Template's Sprig integration only
+registers Sprig's *Hermetic* function map, which deliberately excludes
+every date/time and random function - non-date Sprig functions like
+`sprig_upper` work fine) and catalogs what else is/isn't registered
+(`env`/`mustEnv`/`envOrDefault` included), confirmed live against the same
+chart/version.
 
 **Atomicity of the SDK-facing file, also confirmed live**: rendering the
 placeholder directly to the same file the SDK reads would leave a real
