@@ -64,3 +64,30 @@ output "irsa_test_bucket_name" {
   description = "Private bucket the IRSA role can read/write, used to verify IRSA end to end from a pod."
   value       = aws_s3_bucket.irsa_test.bucket
 }
+
+# The five outputs below are null when enable_vault = false (see vault.tf).
+
+output "vault_instance_id" {
+  description = "Instance ID of the standalone Vault instance, if enabled."
+  value       = var.enable_vault ? aws_instance.vault[0].id : null
+}
+
+output "vault_private_ip" {
+  description = "Private IP of the standalone Vault instance (used as VAULT_ADDR by Ansible and pods), if enabled."
+  value       = var.enable_vault ? aws_instance.vault[0].private_ip : null
+}
+
+output "vault_test_role_arn" {
+  description = "Role ARN Vault's AWS secrets engine assumes on behalf of pods (terraform-vault/modules/aws), if enabled."
+  value       = var.enable_vault ? aws_iam_role.vault_test[0].arn : null
+}
+
+output "vault_test_bucket_name" {
+  description = "Private bucket the Vault-issued role can read/write, used to verify the Vault credential chain end to end, if enabled."
+  value       = var.enable_vault ? aws_s3_bucket.vault_test[0].bucket : null
+}
+
+output "vault_tunnel_command" {
+  description = "Run this (in a separate shell) to reach the Vault API from your laptop - needed for terraform-vault/ runs and for the manual verification steps, if enabled."
+  value       = var.enable_vault ? "aws ssm start-session --profile ${var.aws_profile} --region ${var.aws_region} --target ${aws_instance.vault[0].id} --document-name AWS-StartPortForwardingSession --parameters '{\"portNumber\":[\"8200\"],\"localPortNumber\":[\"8200\"]}'" : null
+}

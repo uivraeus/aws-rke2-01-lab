@@ -1,0 +1,61 @@
+---
+# Installs, initializes, and bootstraps the standalone Vault instance evaluated as a
+# second (independent) path for pods to get scoped AWS credentials - see the
+# "Vault-issued AWS credentials" section in README.md. Root token/unseal keys/AppRole
+# credentials are written to ../local (gitignored), never committed. Normally invoked
+# as part of `make bootstrap-vault` (scripts/bootstrap-vault.sh), which runs the
+# install/init/tokens tags in sequence - the standalone tags below are for re-running
+# just one piece:
+#
+#   make create-operator-vault  # re-create the terraform-operator AppRole (--tags tokens)
+#   make unseal-vault           # re-unseal after a restart (source local/vault-*.json's
+#                                # keys as VAULT_UNSEAL_KEY_1.. first) (--tags unseal)
+
+- name: Install Vault
+  hosts: vault
+  become: true
+  pre_tasks:
+    - name: Get Vault status
+      ansible.builtin.include_role:
+        name: vault_status
+        apply:
+          tags: [install, init]
+      tags: [install, init]
+
+    - name: Abort if Vault is already initialized
+      ansible.builtin.fail:
+        msg: >-
+          Vault is already initialized on {{ inventory_hostname }}.
+          There is no reset playbook here - tear down and re-apply the vault
+          instance in Terraform if you intend to start fresh.
+      when: vault_status_initialized
+      tags: [install]
+  roles:
+    - role: vault_install
+      tags: [install]
+
+- name: Initialize and unseal Vault
+  hosts: vault
+  become: false
+  vars:
+    vault_init_output_dir: "{{ playbook_dir }}/../local"
+  roles:
+    - role: vault_init
+      tags: [init]
+
+- name: Unseal Vault (post-restart recovery)
+  hosts: vault
+  become: false
+  roles:
+    - role: vault_unseal
+      tags: [unseal]
+
+- name: Create terraform-operator AppRole
+  hosts: vault
+  become: false
+  vars:
+    vault_tokens_policy_file: "{{ playbook_dir }}/roles/vault_tokens/files/terraform-operator-policy.hcl"
+    vault_tokens_output_dir: "{{ playbook_dir }}/../local"
+  roles:
+    - role: vault_tokens
+      tags: [tokens]

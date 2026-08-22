@@ -1,0 +1,7 @@
+---
+vault_init_key_shares: 5
+vault_init_key_threshold: 3
+vault_init_addr: "http://127.0.0.1:8200"
+# Path on the control node where the init output JSON is saved.
+# Relative to the directory from which ansible-playbook is invoked.
+vault_init_output_dir: "local"

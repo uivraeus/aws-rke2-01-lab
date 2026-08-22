@@ -1,0 +1,15 @@
+ui = {{ vault_install_ui | lower }}
+
+storage "file" {
+  path = "{{ vault_install_data_dir }}"
+}
+
+listener "tcp" {
+  address = "{{ vault_install_listener_address }}"
+{% if vault_install_tls_disable %}
+  tls_disable = 1
+{% else %}
+  tls_cert_file = "{{ vault_install_tls_cert_file }}"
+  tls_key_file  = "{{ vault_install_tls_key_file }}"
+{% endif %}
+}

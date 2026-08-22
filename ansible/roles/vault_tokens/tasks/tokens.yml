@@ -1,0 +1,86 @@
+---
+- name: Assert required inputs are set
+  ansible.builtin.assert:
+    that:
+      - lookup('env', 'VAULT_ROOT_TOKEN') != ''
+      - vault_tokens_policy_file != ''
+    fail_msg: "VAULT_ROOT_TOKEN env var and vault_tokens_policy_file must both be set"
+
+- name: Check enabled auth methods
+  ansible.builtin.command: vault auth list -format=json
+  environment:
+    VAULT_ADDR: "{{ vault_tokens_addr }}"
+    VAULT_TOKEN: "{{ lookup('env', 'VAULT_ROOT_TOKEN') }}"
+  register: vault_tokens_auth_list_result
+  changed_when: false
+
+- name: Enable AppRole auth method
+  ansible.builtin.command: vault auth enable approle
+  environment:
+    VAULT_ADDR: "{{ vault_tokens_addr }}"
+    VAULT_TOKEN: "{{ lookup('env', 'VAULT_ROOT_TOKEN') }}"
+  when: "'approle/' not in (vault_tokens_auth_list_result.stdout | from_json)"
+  changed_when: true
+
+- name: Copy policy file to target
+  ansible.builtin.copy:
+    src: "{{ vault_tokens_policy_file }}"
+    dest: "/tmp/vault-policy-{{ vault_tokens_policy_name }}.hcl"
+    mode: "0600"
+
+- name: Write policy
+  ansible.builtin.command: "vault policy write {{ vault_tokens_policy_name }} /tmp/vault-policy-{{ vault_tokens_policy_name }}.hcl"
+  environment:
+    VAULT_ADDR: "{{ vault_tokens_addr }}"
+    VAULT_TOKEN: "{{ lookup('env', 'VAULT_ROOT_TOKEN') }}"
+  changed_when: true
+
+- name: Remove temp policy file
+  ansible.builtin.file:
+    path: "/tmp/vault-policy-{{ vault_tokens_policy_name }}.hcl"
+    state: absent
+
+- name: Create terraform-operator AppRole
+  ansible.builtin.command: >-
+    vault write auth/approle/role/{{ vault_tokens_approle_name }}
+    token_policies={{ vault_tokens_policy_name }}
+    token_ttl={{ vault_tokens_token_ttl }}
+    token_max_ttl={{ vault_tokens_token_max_ttl }}
+    secret_id_ttl=0
+    secret_id_num_uses=0
+  environment:
+    VAULT_ADDR: "{{ vault_tokens_addr }}"
+    VAULT_TOKEN: "{{ lookup('env', 'VAULT_ROOT_TOKEN') }}"
+  changed_when: true
+
+- name: Read role_id
+  ansible.builtin.command: "vault read -field=role_id auth/approle/role/{{ vault_tokens_approle_name }}/role-id"
+  environment:
+    VAULT_ADDR: "{{ vault_tokens_addr }}"
+    VAULT_TOKEN: "{{ lookup('env', 'VAULT_ROOT_TOKEN') }}"
+  register: vault_tokens_role_id_result
+  changed_when: false
+
+- name: Generate secret_id
+  ansible.builtin.command: "vault write -f -field=secret_id auth/approle/role/{{ vault_tokens_approle_name }}/secret-id"
+  environment:
+    VAULT_ADDR: "{{ vault_tokens_addr }}"
+    VAULT_TOKEN: "{{ lookup('env', 'VAULT_ROOT_TOKEN') }}"
+  register: vault_tokens_secret_id_result
+  changed_when: true
+  no_log: true
+
+- name: Save AppRole credentials to control node
+  # owner:/group: - see ansible-notes.md / vault_init/tasks/init.yml: delegate_to:
+  # localhost runs as root here regardless of become, so this hands the file back to
+  # the actual operator instead of leaving it root-owned.
+  ansible.builtin.copy:
+    content: |
+      export TF_VAR_vault_role_id={{ vault_tokens_role_id_result.stdout }}
+      export TF_VAR_vault_secret_id={{ vault_tokens_secret_id_result.stdout }}
+    dest: "{{ vault_tokens_output_dir }}/terraform-operator-{{ inventory_hostname }}.env"
+    mode: "0600"
+    owner: "{{ lookup('env', 'USER') }}"
+    group: "{{ lookup('env', 'USER') }}"
+  delegate_to: localhost
+  no_log: true

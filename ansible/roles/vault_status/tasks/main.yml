@@ -1,0 +1,14 @@
+---
+- name: Check Vault status
+  ansible.builtin.command: vault status -format=json
+  environment:
+    VAULT_ADDR: "{{ vault_status_addr }}"
+  register: vault_status_result
+  # rc 0=unsealed, 2=sealed - both are valid; rc 1 means unreachable, 127 means not installed
+  failed_when: false
+  changed_when: false
+
+- name: Set Vault status facts
+  ansible.builtin.set_fact:
+    vault_status_initialized: "{{ (vault_status_result.stdout | default('{}', true) | from_json).initialized | default(false) }}"
+    vault_status_sealed: "{{ (vault_status_result.stdout | default('{}', true) | from_json).sealed | default(true) }}"

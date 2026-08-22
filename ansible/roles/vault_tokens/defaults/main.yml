@@ -1,0 +1,11 @@
+---
+vault_tokens_addr: "http://127.0.0.1:8200"
+vault_tokens_approle_name: "terraform-operator"
+vault_tokens_policy_name: "terraform-operator"
+vault_tokens_token_ttl: "1h"
+vault_tokens_token_max_ttl: "4h"
+# Path on the control node to the HCL policy file. Required - no default.
+vault_tokens_policy_file: ""
+# Path on the control node where AppRole credentials env file is saved.
+# Relative to the directory from which ansible-playbook is invoked.
+vault_tokens_output_dir: "local"

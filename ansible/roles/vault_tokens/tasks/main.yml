@@ -1,0 +1,3 @@
+---
+- name: Configure terraform-operator AppRole
+  ansible.builtin.import_tasks: tokens.yml

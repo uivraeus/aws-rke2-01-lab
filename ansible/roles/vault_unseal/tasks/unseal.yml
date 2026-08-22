@@ -1,0 +1,39 @@
+---
+- name: Get Vault status
+  ansible.builtin.include_role:
+    name: vault_status
+    apply:
+      tags: [unseal]
+  vars:
+    vault_status_addr: "{{ vault_unseal_addr }}"
+  tags: [unseal]
+
+- name: Verify unseal key env vars are set
+  ansible.builtin.assert:
+    that: lookup('env', 'VAULT_UNSEAL_KEY_' + (item | string)) != ''
+    fail_msg: "VAULT_UNSEAL_KEY_{{ item }} environment variable is not set"
+  loop: "{{ range(1, vault_unseal_key_count + 1) | list }}"
+  when: vault_status_sealed
+
+- name: Apply unseal keys
+  ansible.builtin.command: "vault operator unseal {{ lookup('env', 'VAULT_UNSEAL_KEY_' + (item | string)) }}"
+  environment:
+    VAULT_ADDR: "{{ vault_unseal_addr }}"
+  loop: "{{ range(1, vault_unseal_key_count + 1) | list }}"
+  when: vault_status_sealed
+  changed_when: true
+  no_log: true
+
+- name: Verify Vault is unsealed
+  ansible.builtin.command: vault status -format=json
+  environment:
+    VAULT_ADDR: "{{ vault_unseal_addr }}"
+  register: vault_unseal_verify_result
+  changed_when: false
+  when: vault_status_sealed
+
+- name: Assert Vault is unsealed
+  ansible.builtin.assert:
+    that: not (vault_unseal_verify_result.stdout | from_json).sealed
+    fail_msg: "Vault is still sealed after applying {{ vault_unseal_key_count }} keys"
+  when: vault_status_sealed

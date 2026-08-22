@@ -7,7 +7,7 @@
 # default credential chain picks them up exactly as it would with the webhook.
 #
 # Fill in the placeholders below from Terraform, then apply against the
-# cluster (open `make tunnel` in another shell first):
+# cluster (open `make tunnel-k8s` in another shell first):
 #
 #   export IRSA_ROLE_ARN=$(terraform -chdir=terraform output -raw irsa_role_arn)
 #   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw irsa_test_bucket_name)

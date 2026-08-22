@@ -1,0 +1,49 @@
+# Vault Agent Injector verification - real sidecar, real credential_process rotation.
+#
+# Contrast with manifests/vault-test.yaml (the phase-1 hand-wired initContainer,
+# which fetches credentials once and writes a static AWS_SHARED_CREDENTIALS_FILE - no
+# rotation, structurally can't have any). Here there's no initContainer/sidecar in the
+# spec at all - the two annotations below tell the injector (installed via
+# `make injector-vault`) to mutate this pod at admission time, adding a
+# vault-agent-init container (renders the first copy before the app starts) and a
+# long-running vault-agent sidecar that keeps re-rendering before the lease
+# (terraform-vault's default_sts_ttl, 900s by default) expires.
+#
+# All the actual complexity (the Consul-Template snippet, the Sprig-function
+# workaround, the atomic-write command hook) lives in
+# manifests/vault-agent-config.yaml instead of here - that's the whole point of
+# agent-configmap: an app developer adding this to their own pod only ever needs to
+# see these two annotations, never the ConfigMap's contents. See that file's header
+# comment for what's actually inside, and the README's "Vault Agent Injector" section
+# for the full reasoning.
+#
+# Fill in the placeholders below from Terraform, then apply (open `make tunnel-k8s` in
+# another shell first) - the ConfigMap must exist before this pod does:
+#
+#   export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
+#   envsubst '${VAULT_PRIVATE_IP}' < manifests/vault-agent-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < manifests/vault-test-injector.yaml | kubectl --kubeconfig kubeconfig apply -f -
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vault-test-injector
+  namespace: vault-test
+  annotations:
+    vault.hashicorp.com/agent-inject: "true"
+    vault.hashicorp.com/agent-configmap: "vault-agent-aws-creds-config"
+spec:
+  serviceAccountName: vault-test
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: AWS_CONFIG_FILE
+          value: /vault/secrets/aws-config
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}

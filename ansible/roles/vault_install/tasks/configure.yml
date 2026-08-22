@@ -1,0 +1,63 @@
+---
+- name: Create Vault config directory
+  ansible.builtin.file:
+    path: /etc/vault.d
+    state: directory
+    owner: vault
+    group: vault
+    mode: "0750"
+
+- name: Create Vault TLS directory
+  ansible.builtin.file:
+    path: "{{ vault_install_tls_dir }}"
+    state: directory
+    owner: vault
+    group: vault
+    mode: "0750"
+  when: not vault_install_tls_disable
+
+- name: Generate self-signed TLS certificate  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -newkey rsa:4096 -days 3650 -nodes
+      -keyout {{ vault_install_tls_key_file }}
+      -out {{ vault_install_tls_cert_file }}
+      -subj "/CN={{ inventory_hostname }}"
+      -addext "subjectAltName=IP:127.0.0.1,IP:{{ ansible_host }},DNS:{{ inventory_hostname }}"
+    creates: "{{ vault_install_tls_cert_file }}"
+  when: not vault_install_tls_disable
+  changed_when: true
+  notify: Restart Vault
+
+- name: Set TLS key file permissions
+  ansible.builtin.file:
+    path: "{{ vault_install_tls_key_file }}"
+    owner: vault
+    group: vault
+    mode: "0640"
+  when: not vault_install_tls_disable
+
+- name: Set TLS cert file permissions
+  ansible.builtin.file:
+    path: "{{ vault_install_tls_cert_file }}"
+    owner: vault
+    group: vault
+    mode: "0644"
+  when: not vault_install_tls_disable
+
+- name: Create Vault data directory
+  ansible.builtin.file:
+    path: "{{ vault_install_data_dir }}"
+    state: directory
+    owner: vault
+    group: vault
+    mode: "0750"
+
+- name: Deploy Vault configuration
+  ansible.builtin.template:
+    src: vault.hcl.j2
+    dest: /etc/vault.d/vault.hcl
+    owner: vault
+    group: vault
+    mode: "0640"
+  notify: Restart Vault

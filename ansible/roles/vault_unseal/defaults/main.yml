@@ -1,0 +1,5 @@
+---
+vault_unseal_addr: "http://127.0.0.1:8200"
+# Must match the key threshold used during vault operator init.
+# Expects env vars VAULT_UNSEAL_KEY_1 .. VAULT_UNSEAL_KEY_<vault_unseal_key_count>.
+vault_unseal_key_count: 3

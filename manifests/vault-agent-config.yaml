@@ -1,0 +1,126 @@
+# Shared Vault Agent config, referenced via vault.hashicorp.com/agent-configmap so app
+# pods only need two trivial annotations (agent-inject + agent-configmap) instead of
+# hand-writing a Consul-Template snippet and a shell script per pod - see
+# manifests/vault-test-injector.yaml and the README's "Vault Agent Injector" section.
+#
+# Using agent-configmap means the injector's own auto-generated Vault Agent config is
+# skipped entirely - config-init.hcl (the one-shot init container) and config.hcl (the
+# long-running sidecar) are the injector's *complete* config for both phases, picked
+# apart by these exact filenames. They're identical except exit_after_auth.
+#
+# Must live in the same namespace as any pod referencing it (ConfigMaps aren't
+# cluster-scoped). Apply before the pod, with ${VAULT_PRIVATE_IP} substituted:
+#
+#   export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
+#   envsubst '${VAULT_PRIVATE_IP}' < manifests/vault-agent-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#
+# The template/command content below is unchanged from the annotation-based version
+# proven live earlier (same Sprig-function-unavailable workaround, same atomic
+# raw-file-then-mv pattern) - only its packaging (HCL heredocs instead of YAML
+# annotation strings) is new here.
+#
+# Based on HashiCorp's own agent-configmap example:
+# https://developer.hashicorp.com/vault/docs/platform/k8s/injector/examples
+# (annotation reference: https://developer.hashicorp.com/vault/docs/platform/k8s/injector/annotations)
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-agent-aws-creds-config
+  namespace: vault-test
+data:
+  config-init.hcl: |
+    exit_after_auth = true
+    pid_file = "/home/vault/.pid"
+
+    auto_auth {
+      method "kubernetes" {
+        config = {
+          role = "vault-test"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/home/vault/.vault-token"
+        }
+      }
+    }
+
+    vault {
+      address = "http://${VAULT_PRIVATE_IP}:8200"
+    }
+
+    template {
+      destination = "/vault/secrets/aws-creds-raw"
+      contents = <<EOT
+    {{- with secret "aws/creds/vault-test" -}}
+    {
+      "Version": 1,
+      "AccessKeyId": "{{ .Data.access_key }}",
+      "SecretAccessKey": "{{ .Data.secret_key }}",
+      "SessionToken": "{{ .Data.security_token }}",
+      "Expiration": "__EPOCH_{{ add (timestamp "unix" | parseInt) .LeaseDuration }}_EPOCH__"
+    }
+    {{- end }}
+    EOT
+      command = <<EOT
+    sh -c 'epoch=$(grep -o "__EPOCH_[0-9]*_EPOCH__" /vault/secrets/aws-creds-raw | grep -o "[0-9]*"); exp=$(date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ); sed "s/__EPOCH_[0-9]*_EPOCH__/$exp/" /vault/secrets/aws-creds-raw > /vault/secrets/aws-creds.tmp; mv /vault/secrets/aws-creds.tmp /vault/secrets/aws-creds'
+    EOT
+    }
+
+    template {
+      destination = "/vault/secrets/aws-config"
+      contents = <<EOT
+    [default]
+    credential_process = cat /vault/secrets/aws-creds
+    EOT
+    }
+
+  config.hcl: |
+    exit_after_auth = false
+    pid_file = "/home/vault/.pid"
+
+    auto_auth {
+      method "kubernetes" {
+        config = {
+          role = "vault-test"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/home/vault/.vault-token"
+        }
+      }
+    }
+
+    vault {
+      address = "http://${VAULT_PRIVATE_IP}:8200"
+    }
+
+    template {
+      destination = "/vault/secrets/aws-creds-raw"
+      contents = <<EOT
+    {{- with secret "aws/creds/vault-test" -}}
+    {
+      "Version": 1,
+      "AccessKeyId": "{{ .Data.access_key }}",
+      "SecretAccessKey": "{{ .Data.secret_key }}",
+      "SessionToken": "{{ .Data.security_token }}",
+      "Expiration": "__EPOCH_{{ add (timestamp "unix" | parseInt) .LeaseDuration }}_EPOCH__"
+    }
+    {{- end }}
+    EOT
+      command = <<EOT
+    sh -c 'epoch=$(grep -o "__EPOCH_[0-9]*_EPOCH__" /vault/secrets/aws-creds-raw | grep -o "[0-9]*"); exp=$(date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ); sed "s/__EPOCH_[0-9]*_EPOCH__/$exp/" /vault/secrets/aws-creds-raw > /vault/secrets/aws-creds.tmp; mv /vault/secrets/aws-creds.tmp /vault/secrets/aws-creds'
+    EOT
+    }
+
+    template {
+      destination = "/vault/secrets/aws-config"
+      contents = <<EOT
+    [default]
+    credential_process = cat /vault/secrets/aws-creds
+    EOT
+    }

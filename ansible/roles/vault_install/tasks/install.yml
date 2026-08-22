@@ -1,0 +1,20 @@
+---
+# get_url writes to disk before dearmoring, producing ASCII-armored output apt cannot verify.
+# The pipeline is the only reliable approach here.
+- name: Install HashiCorp apt signing key  # noqa: command-instead-of-module
+  ansible.builtin.shell:
+    cmd: set -o pipefail && curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    executable: /bin/bash
+    creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  changed_when: true
+
+- name: Add HashiCorp apt repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main"
+    filename: hashicorp
+
+- name: Install Vault package
+  ansible.builtin.apt:
+    name: "vault{{ '=' + vault_install_version if vault_install_version != 'latest' else '' }}"
+    update_cache: true
+    state: present

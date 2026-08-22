@@ -10,3 +10,8 @@ aws_region  = "eu-west-1"
 # root_volume_size           = 20
 # irsa_namespace             = "irsa-test"
 # irsa_service_account_name  = "irsa-test"
+
+# Vault evaluation (see the "Vault-issued AWS credentials" README section) - off by
+# default, since it's independent of the base cluster/IRSA:
+# enable_vault         = true
+# vault_instance_type  = "t3.small"

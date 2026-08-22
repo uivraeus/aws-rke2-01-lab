@@ -1,0 +1,59 @@
+---
+- name: Get Vault status
+  ansible.builtin.include_role:
+    name: vault_status
+    apply:
+      tags: [init]
+  vars:
+    vault_status_addr: "{{ vault_init_addr }}"
+  tags: [init]
+
+- name: Run vault operator init
+  ansible.builtin.command: >-
+    vault operator init
+    -key-shares={{ vault_init_key_shares }}
+    -key-threshold={{ vault_init_key_threshold }}
+    -format=json
+  environment:
+    VAULT_ADDR: "{{ vault_init_addr }}"
+  register: vault_init_result
+  when: not vault_status_initialized
+  changed_when: true
+  no_log: true
+
+- name: Ensure output directory exists on control node
+  # delegate_to: localhost still runs as root here despite become: false (see
+  # ansible-notes.md - inherits ansible_become from group_vars/all regardless of
+  # task-level overrides), so owner:/group: are set explicitly to hand the directory
+  # back to the actual operator instead of leaving it root-owned (root's primary
+  # group, not just root's user) and unreadable to them. Assumes the operator's
+  # primary group is named the same as their username (true for a typical single-user
+  # dev machine/devcontainer) - there's no portable env-var equivalent of $USER for
+  # the primary group name.
+  ansible.builtin.file:
+    path: "{{ vault_init_output_dir }}"
+    state: directory
+    mode: "0700"
+    owner: "{{ lookup('env', 'USER') }}"
+    group: "{{ lookup('env', 'USER') }}"
+  delegate_to: localhost
+  become: false
+
+- name: Save init output to control node
+  ansible.builtin.copy:
+    content: "{{ vault_init_result.stdout }}"
+    dest: "{{ vault_init_output_dir }}/vault-{{ inventory_hostname }}.json"
+    mode: "0600"
+    owner: "{{ lookup('env', 'USER') }}"
+    group: "{{ lookup('env', 'USER') }}"
+  delegate_to: localhost
+  when: not vault_status_initialized
+
+- name: Unseal Vault with init keys
+  ansible.builtin.command: "vault operator unseal {{ item }}"
+  environment:
+    VAULT_ADDR: "{{ vault_init_addr }}"
+  loop: "{{ (vault_init_result.stdout | from_json).unseal_keys_b64[: (vault_init_key_threshold | int)] }}"
+  when: not vault_status_initialized
+  changed_when: true
+  no_log: true

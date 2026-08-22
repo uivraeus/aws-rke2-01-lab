@@ -134,15 +134,21 @@ resource "aws_instance" "worker" {
 resource "local_file" "ansible_terraform_vars" {
   filename = "${path.module}/../ansible/group_vars/all/terraform.yml"
 
-  content = yamlencode({
-    aws_profile         = var.aws_profile
-    aws_region          = var.aws_region
-    cluster_name        = var.cluster_name
-    ssm_bucket_name     = aws_s3_bucket.ssm_transfer.bucket
-    control_instance_id = aws_instance.control.id
-    control_private_ip  = aws_instance.control.private_ip
-    oidc_bucket_name    = aws_s3_bucket.oidc.bucket
-    oidc_issuer_url     = local.oidc_issuer_url
-    oidc_jwks_uri       = "${local.oidc_issuer_url}/keys.json"
-  })
+  content = yamlencode(merge(
+    {
+      aws_profile         = var.aws_profile
+      aws_region          = var.aws_region
+      cluster_name        = var.cluster_name
+      ssm_bucket_name     = aws_s3_bucket.ssm_transfer.bucket
+      control_instance_id = aws_instance.control.id
+      control_private_ip  = aws_instance.control.private_ip
+      oidc_bucket_name    = aws_s3_bucket.oidc.bucket
+      oidc_issuer_url     = local.oidc_issuer_url
+      oidc_jwks_uri       = "${local.oidc_issuer_url}/keys.json"
+    },
+    # Only present when enable_vault = true - the "vault" Ansible inventory group is
+    # simply empty otherwise (no EC2 instance tagged Role=vault to discover), so
+    # nothing needs this key to exist unconditionally.
+    var.enable_vault ? { vault_private_ip = aws_instance.vault[0].private_ip } : {}
+  ))
 }

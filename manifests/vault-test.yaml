@@ -1,0 +1,95 @@
+# Manual Vault-issued-AWS-credentials verification - no Vault Agent Injector involved.
+#
+# Normally the injector (a Helm-deployed mutating webhook) would run a Vault Agent
+# sidecar that logs in and keeps credentials refreshed automatically. Since that's not
+# installed at this stage, this manifest does the same thing by hand: an initContainer
+# logs in via the Kubernetes auth method using the pod's own (default, automatically
+# mounted) ServiceAccount token, reads AWS credentials from the "aws" secrets engine
+# once, and writes them as a standard AWS shared-credentials file for the aws-cli
+# container to pick up. No rotation - same "no webhook yet" scope as irsa-test.yaml.
+#
+# Fill in the placeholders below from Terraform, then apply against the cluster
+# (open `make tunnel-k8s` in another shell first):
+#
+#   export VAULT_ADDR="http://$(terraform -chdir=terraform output -raw vault_private_ip):8200"
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst < manifests/vault-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#
+# vault-test namespace/serviceaccount names below must match
+# var.vault_namespace/var.vault_service_account_name in terraform-vault (defaults:
+# "vault-test"/"vault-test") - they're baked into the Kubernetes auth backend role's
+# bound_service_account_names/namespaces.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vault-test
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-test
+  namespace: vault-test
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vault-test
+  namespace: vault-test
+spec:
+  serviceAccountName: vault-test
+  initContainers:
+    - name: vault-login
+      image: hashicorp/vault:latest
+      # The image's default user (uid 100, "vault") can't apk-install jq - root is
+      # needed for that one step; the rest of the pod (main container) stays default.
+      securityContext:
+        runAsUser: 0
+      env:
+        - name: VAULT_ADDR
+          value: ${VAULT_ADDR}
+      command:
+        - sh
+        - -c
+        - |
+          set -eu
+          apk add --no-cache jq >/dev/null
+
+          VAULT_TOKEN=$(vault write -field=token auth/kubernetes/login \
+            role=vault-test \
+            jwt=@/var/run/secrets/kubernetes.io/serviceaccount/token)
+          export VAULT_TOKEN
+
+          vault read -format=json aws/creds/vault-test > /tmp/creds.json
+
+          mkdir -p /aws-creds
+          {
+            echo "[default]"
+            echo "aws_access_key_id = $(jq -r .data.access_key /tmp/creds.json)"
+            echo "aws_secret_access_key = $(jq -r .data.secret_key /tmp/creds.json)"
+            echo "aws_session_token = $(jq -r .data.security_token /tmp/creds.json)"
+          } > /aws-creds/credentials
+      volumeMounts:
+        - name: aws-creds
+          mountPath: /aws-creds
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: AWS_SHARED_CREDENTIALS_FILE
+          value: /aws-creds/credentials
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}
+      volumeMounts:
+        - name: aws-creds
+          mountPath: /aws-creds
+          readOnly: true
+  volumes:
+    - name: aws-creds
+      emptyDir: {}

@@ -26,6 +26,18 @@ variable "worker_instance_type" {
   default     = "t3.medium"
 }
 
+variable "enable_vault" {
+  description = "Provision the standalone Vault instance and its wiring (see vault.tf) - an independent, optional evaluation alongside IRSA. Defaults to off. If you turn this off after having turned it on, destroy terraform-vault's resources first (`make destroy-vault`/`make destroy-all`), otherwise that root's state is left pointing at a Vault server this apply just removed."
+  type        = bool
+  default     = false
+}
+
+variable "vault_instance_type" {
+  description = "Instance type for the standalone Vault instance (only used if enable_vault = true)."
+  type        = string
+  default     = "t3.small"
+}
+
 variable "root_volume_size" {
   description = "Root EBS volume size (GiB) for each node."
   type        = number

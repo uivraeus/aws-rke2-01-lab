@@ -1,0 +1,37 @@
+# ServiceAccount Vault uses as the "token reviewer" for its Kubernetes auth method.
+# Vault runs on its own EC2 instance, outside this cluster, so it can't use an
+# in-cluster identity for this the way a Vault-Agent-Injector setup normally would -
+# it's instead handed a long-lived token for this ServiceAccount once (see the
+# k8s_token_reviewer_jwt step in terraform-vault/env.sh) and uses it to call the
+# TokenReview API on every pod login. system:auth-delegator is the ClusterRole the
+# Kubernetes auth method's own docs specify for this - it grants exactly
+# create-a-TokenReview/SubjectAccessReview, nothing else.
+#
+# Apply once, before the first `terraform -chdir=terraform-vault apply`:
+#   kubectl --kubeconfig kubeconfig apply -f manifests/vault-k8s-auth.yaml
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vault-auth
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-auth-delegator
+  namespace: vault-auth
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: vault-auth-delegator
+    namespace: vault-auth

@@ -1,0 +1,13 @@
+---
+vault_install_version: latest
+vault_install_data_dir: /opt/vault/data
+vault_install_listener_address: "0.0.0.0:8200"
+# The Vault instance sits in its own security group with no internet ingress (same
+# model as the RKE2 nodes) and this evaluation is about the AWS secrets engine / K8s
+# auth mechanics, not Vault's own PKI - so TLS is deliberately off for now. Set to
+# false and fill in vault_install_tls_{cert,key}_file to layer TLS on later.
+vault_install_tls_disable: true
+vault_install_tls_dir: /etc/vault.d/tls
+vault_install_tls_cert_file: /etc/vault.d/tls/vault-cert.pem
+vault_install_tls_key_file: /etc/vault.d/tls/vault-key.pem
+vault_install_ui: true

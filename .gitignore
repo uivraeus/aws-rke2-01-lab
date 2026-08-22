@@ -4,13 +4,21 @@ terraform/terraform.tfstate
 terraform/terraform.tfstate.*
 terraform/terraform.tfvars
 terraform/*.tfplan
+terraform-vault/.terraform/
+terraform-vault/terraform.tfstate
+terraform-vault/terraform.tfstate.*
+terraform-vault/*.tfplan
 crash.log
 
 # Ansible
 ansible/group_vars/all/terraform.yml
 ansible/*.retry
 ansible/.ansible/
+/.ansible-venv/
 
 # Generated cluster access
 kubeconfig
 /kubectl
+
+# Vault root token / unseal keys / AppRole credentials - never commit these
+/local/
