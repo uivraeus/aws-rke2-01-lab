@@ -365,7 +365,15 @@ lifetime and never notice the file changed). Real rotation needs
 and knows when to re-invoke it - which needs something that keeps
 re-fetching before the lease expires. That's what the **Vault Agent
 Injector** (a mutating admission webhook, from the same `hashicorp/vault`
-Helm chart used for the server) provides.
+Helm chart used for the server) provides. See
+[docs/aws-sdk-credential-caching.md](docs/aws-sdk-credential-caching.md) for
+the research behind that caching claim (per-SDK sources, the
+per-process/long-lived-client nuance) and a live rig
+(`manifests/vault-agent-config-raw.yaml` +
+`manifests/vault-test-rotation-proof.yaml`) that proves it directly: the
+`aws` CLI, a long-lived `boto3` session, and a long-lived `aws-sdk-go-v2`
+client all pointed at the same naively-injected file across a real
+rotation.
 
 ```sh
 make injector-vault
