@@ -108,7 +108,11 @@ the one you care about and follow it end to end without needing the others:
   `terraform-vault/`) - a standalone HashiCorp Vault instance brokers
   credentials instead, using its own AWS identity to assume roles on pods'
   behalf.
-- **AWS Roles Anywhere** - planned as a third path, not yet started.
+- **[AWS Roles Anywhere](docs/rolesanywhere.md)** (`terraform/rolesanywhere.tf`
+  + cert-manager) - pods get an X.509 identity from a self-signed CA via
+  cert-manager, and AWS Roles Anywhere brokers credentials by validating
+  that certificate against a matching trust anchor, instead of a
+  Kubernetes-native token.
 
 ## Verifying RKE2's service-account key rotation (not IRSA-specific)
 
