@@ -1,0 +1,68 @@
+# IRSA verification via the real pod-identity webhook - no manual volume/env wiring.
+#
+# Contrast with manifests/irsa-test.yaml (the hand-wired pod, which sets
+# AWS_ROLE_ARN/AWS_WEB_IDENTITY_TOKEN_FILE and the projected token volume directly
+# in its own spec since no webhook is involved there). Here there's none of that -
+# just a ServiceAccount annotation. The webhook (installed via
+# `make pod-identity-webhook`, see manifests/pod-identity-webhook.yaml) sees that
+# annotation at pod admission time and injects everything else itself.
+#
+# Self-contained and mutually exclusive with manifests/irsa-test.yaml - both
+# create identically-named Namespace/ServiceAccount/Pod objects (required to
+# match the IAM role's trust policy condition), demonstrating the same end-to-end
+# IRSA chain two different ways. Apply only one of the two at a time; switching
+# means deleting this one first (`kubectl delete namespace irsa-test`), not
+# applying both together.
+#
+# Fill in the placeholders below from Terraform, then apply (open `make tunnel-k8s`
+# in another shell first) - the webhook must already be installed:
+#
+#   export IRSA_ROLE_ARN=$(terraform -chdir=terraform output -raw irsa_role_arn)
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw irsa_test_bucket_name)
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst < manifests/irsa-webhook-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#
+# irsa-test namespace/serviceaccount names below must match var.irsa_namespace
+# / var.irsa_service_account_name (defaults: "irsa-test" / "irsa-test") -
+# they're baked into the IAM role's trust policy condition.
+#
+# If AWS_ROLE_ARN/AWS_WEB_IDENTITY_TOKEN_FILE don't show up in the pod's env
+# (`kubectl exec ... -- env | grep AWS_`), the webhook's ServiceAccount informer
+# cache may not have caught up yet - delete and recreate the pod a few seconds
+# later.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: irsa-test
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: irsa-test
+  namespace: irsa-test
+  annotations:
+    # Consumed by the pod-identity webhook (manifests/pod-identity-webhook.yaml),
+    # which runs with --annotation-prefix=rke2-lab.internal instead of the EKS
+    # default (eks.amazonaws.com) - this cluster isn't EKS, and the annotation key
+    # has to match whatever prefix the webhook was actually started with.
+    rke2-lab.internal/role-arn: ${IRSA_ROLE_ARN}
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: irsa-test
+  namespace: irsa-test
+spec:
+  serviceAccountName: irsa-test
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}

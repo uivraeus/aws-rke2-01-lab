@@ -1,10 +1,17 @@
-# Manual IRSA verification manifests - no pod-identity webhook involved.
+# Manual IRSA verification - no pod-identity webhook involved.
 #
 # Normally a webhook (e.g. amazon-eks-pod-identity-webhook) injects the
 # projected token volume and AWS_ROLE_ARN/AWS_WEB_IDENTITY_TOKEN_FILE env vars
-# into any pod using an annotated ServiceAccount. Since that's not installed
-# here, this manifest does the same thing by hand so the aws-cli container's
-# default credential chain picks them up exactly as it would with the webhook.
+# into any pod using an annotated ServiceAccount. This manifest does the same
+# thing by hand instead, so the aws-cli container's default credential chain
+# picks them up exactly as it would with the webhook.
+#
+# Self-contained and mutually exclusive with manifests/irsa-webhook-test.yaml -
+# that file demonstrates the same end-to-end IRSA chain via the real webhook
+# instead. Both create identically-named Namespace/ServiceAccount/Pod objects
+# (required to match the IAM role's trust policy condition - see below), so
+# apply only one of the two at a time; switching means deleting this one
+# first (`kubectl delete namespace irsa-test`), not applying both together.
 #
 # Fill in the placeholders below from Terraform, then apply against the
 # cluster (open `make tunnel-k8s` in another shell first):
@@ -29,10 +36,9 @@ kind: ServiceAccount
 metadata:
   name: irsa-test
   namespace: irsa-test
-  annotations:
-    # Not consumed by anything without the webhook installed, but kept so the
-    # ServiceAccount is ready for it later without further changes.
-    eks.amazonaws.com/role-arn: ${IRSA_ROLE_ARN}
+  # No rke2-lab.internal/role-arn annotation here - this ServiceAccount is only
+  # ever read by this file's own hand-wired Pod below, never by the webhook (see
+  # manifests/irsa-webhook-test.yaml for that annotation instead).
 
 ---
 apiVersion: v1

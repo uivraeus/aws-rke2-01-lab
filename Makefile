@@ -28,7 +28,7 @@ ANSIBLE_ENV = AWS_PROFILE=$$(terraform -chdir=../$(TF_DIR) output -raw aws_profi
 	restart reboot sync-oidc rotate-sa-key \
 	tunnel-k8s tunnel-vault \
 	create-operator-vault unseal-vault \
-	injector-vault
+	injector-vault cert-manager pod-identity-webhook
 
 # Creates .ansible-venv if missing and makes sure ansible/boto3/botocore are installed
 # in it. Safe/fast to depend on from every ansible-invoking target: python3 -m venv is
@@ -156,6 +156,25 @@ injector-vault:
 		--set server.enabled=false \
 		--set global.externalVaultAddr=http://$$(cd $(TF_DIR) && terraform output -raw vault_private_ip):8200 \
 		--kubeconfig kubeconfig
+
+# cert-manager is a hard prerequisite for amazon-eks-pod-identity-webhook
+# (https://github.com/aws/amazon-eks-pod-identity-webhook - see
+# manifests/pod-identity-webhook.yaml) - its own MutatingWebhookConfiguration's
+# caBundle gets populated by cert-manager's CA injector, not by us.
+cert-manager:
+	helm repo add jetstack https://charts.jetstack.io >/dev/null 2>&1 || true
+	helm repo update jetstack
+	helm upgrade --install cert-manager jetstack/cert-manager \
+		--namespace cert-manager --create-namespace \
+		--set crds.enabled=true \
+		--kubeconfig kubeconfig
+
+# Installs amazon-eks-pod-identity-webhook from manifests/pod-identity-webhook.yaml -
+# no official Helm chart exists for it (upstream ships plain deploy/*.yaml manifests
+# + a Makefile, and it isn't in aws/eks-charts either), so this repo vendors and
+# adapts those manifests directly instead of depending on an unofficial chart.
+pod-identity-webhook: cert-manager
+	kubectl --kubeconfig kubeconfig apply -f manifests/pod-identity-webhook.yaml
 
 # Restarts rke2-server/rke2-agent and waits for the node(s) to report Ready again.
 #   make restart               # both nodes
