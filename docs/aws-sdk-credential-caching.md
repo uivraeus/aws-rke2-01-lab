@@ -1,7 +1,7 @@
 # Why plain file injection can't rotate: AWS SDK/CLI credential-file caching
 
-This traces the assumption behind the README's "Vault Agent Injector" section
-([`credential_process` rotation](../README.md#vault-agent-injector-real-sidecar-real-credential_process-rotation)):
+This traces the assumption behind [docs/vault.md](vault.md)'s "Vault Agent Injector" section
+([`credential_process` rotation](vault.md#vault-agent-injector-real-sidecar-real-credential_process-rotation)):
 that pointing an app straight at a Vault-Agent-rendered `AWS_SHARED_CREDENTIALS_FILE`
 (no `credential_process`) can't rotate credentials into a running process, because
 "AWS SDKs cache the file for the client's lifetime and never notice it changed."
@@ -57,7 +57,7 @@ that object for the rest of the process's life - which is exactly the shape
 of a real service pod.
 
 This matters for how this repo's other tests are structured: rotation gets
-proven elsewhere in the README via repeated `kubectl exec ... -- aws s3 ls
+proven elsewhere in [docs/vault.md](vault.md) via repeated `kubectl exec ... -- aws s3 ls
 ...` calls, and each of those is a fresh CLI process. Run that same style of
 check against a naively-injected file (no `credential_process`) and it would
 *appear* to rotate correctly, purely because the CLI re-reads on every
@@ -89,8 +89,8 @@ currently believes is current:
 Expected result, based on the research above: after Vault Agent re-renders
 the file with a new lease's `AccessKeyId` (wait out
 `terraform-vault`'s `default_sts_ttl`, same as the `credential_process` proof
-in the README - forced revocation doesn't trigger an early re-fetch for
-non-renewable `assumed_role` credentials, confirmed in the README's
+in [docs/vault.md](vault.md) - forced revocation doesn't trigger an early re-fetch for
+non-renewable `assumed_role` credentials, confirmed in that doc's
 "Proving rotation" note), `aws-cli`'s logged key should change on its next
 line while `python-boto3` and `go-sdk` keep logging the pre-rotation key
 until the pod is restarted. **Confirmed live - see "Results" below, which

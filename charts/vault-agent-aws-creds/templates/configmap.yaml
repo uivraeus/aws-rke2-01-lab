@@ -1,7 +1,7 @@
 # Renders the injector's agent-configmap convention: config-init.hcl (one-shot init
 # container) and config.hcl (long-running sidecar), picked apart by the injector
 # using those exact filenames and identical except exit_after_auth. See this repo's
-# README "Vault Agent Injector" section and manifests/vault-agent-config.yaml (the
+# docs/vault.md "Vault Agent Injector" section and manifests/vault-agent-config.yaml (the
 # hand-authored version this wraps) for the full design this replicates.
 apiVersion: v1
 kind: ConfigMap

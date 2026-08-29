@@ -16,7 +16,7 @@
 # Expected result (see docs/aws-sdk-credential-caching.md): after Vault Agent re-renders
 # the file with a new lease (wait out terraform-vault's default_sts_ttl - forced
 # revocation doesn't trigger an early re-fetch for non-renewable assumed_role
-# credentials, per the README's "Proving rotation" note), aws-cli's logged key changes on
+# credentials, per docs/vault.md's "Proving rotation" note), aws-cli's logged key changes on
 # its next line while python-boto3 and go-sdk keep logging the pre-rotation key until the
 # pod is restarted.
 #

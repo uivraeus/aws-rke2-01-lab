@@ -14,7 +14,7 @@
 # manifests/vault-agent-config.yaml instead of here - that's the whole point of
 # agent-configmap: an app developer adding this to their own pod only ever needs to
 # see these two annotations, never the ConfigMap's contents. See that file's header
-# comment for what's actually inside, and the README's "Vault Agent Injector" section
+# comment for what's actually inside, and docs/vault.md's "Vault Agent Injector" section
 # for the full reasoning.
 #
 # Fill in the placeholders below from Terraform, then apply (open `make tunnel-k8s` in

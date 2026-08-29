@@ -1,7 +1,7 @@
 ---
 # Installs, initializes, and bootstraps the standalone Vault instance evaluated as a
 # second (independent) path for pods to get scoped AWS credentials - see the
-# "Vault-issued AWS credentials" section in README.md. Root token/unseal keys/AppRole
+# "Vault-issued AWS credentials" doc, docs/vault.md. Root token/unseal keys/AppRole
 # credentials are written to ../local (gitignored), never committed. Normally invoked
 # as part of `make bootstrap-vault` (scripts/bootstrap-vault.sh), which runs the
 # install/init/tokens tags in sequence - the standalone tags below are for re-running

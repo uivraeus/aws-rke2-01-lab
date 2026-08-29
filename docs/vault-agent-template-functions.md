@@ -3,7 +3,7 @@
 Deep-dive into which Consul Template functions the Vault Agent Injector
 actually has available, for the exact chart/version this repo pins:
 `hashicorp/vault` Helm chart `0.34.1`, app version (Vault/Vault Agent)
-`2.0.4`. Grew out of the caveat noted in the README's "Vault Agent
+`2.0.4`. Grew out of the caveat noted in [docs/vault.md](vault.md)'s "Vault Agent
 Injector" section, where `manifests/vault-agent-config.yaml` needed a
 shell-script workaround because the obvious template-only approach
 (`sprig_now`/`sprig_date`/`timeAdd`) errored as undefined against the live
@@ -90,8 +90,8 @@ sprig_toDate: 2024-01-01 00:00:00 +0000 UTC
 Confirms:
 
 - **Non-date/non-random `sprig_*` functions genuinely work** - the
-  "Sprig functions aren't registered" framing in the README's original
-  caveat was too broad. String/math/list Sprig helpers (`sprig_upper`,
+  "Sprig functions aren't registered" framing in [docs/vault.md](vault.md)'s
+  original caveat was too broad. String/math/list Sprig helpers (`sprig_upper`,
   `sprig_trunc`, `sprig_add1`, `sprig_list`, etc.) are all registered and
   usable; it's specifically the date/time and random ones that are
   missing, and precisely because of the Hermetic-map exclusion above -

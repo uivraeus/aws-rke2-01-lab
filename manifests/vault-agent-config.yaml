@@ -1,7 +1,7 @@
 # Shared Vault Agent config, referenced via vault.hashicorp.com/agent-configmap so app
 # pods only need two trivial annotations (agent-inject + agent-configmap) instead of
 # hand-writing a Consul-Template snippet and a shell script per pod - see
-# manifests/vault-test-injector.yaml and the README's "Vault Agent Injector" section.
+# manifests/vault-test-injector.yaml and docs/vault.md's "Vault Agent Injector" section.
 #
 # Using agent-configmap means the injector's own auto-generated Vault Agent config is
 # skipped entirely - config-init.hcl (the one-shot init container) and config.hcl (the

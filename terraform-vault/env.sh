@@ -26,8 +26,7 @@ export TF_VAR_kubernetes_ca_cert="$(
 )"
 
 # Created automatically by scripts/bootstrap-vault.sh; if sourcing this by hand before
-# that's run, create it manually first (see README's "Vault-issued AWS credentials"
-# section):
+# that's run, create it manually first (see docs/vault.md):
 #   kubectl --kubeconfig kubeconfig -n vault-auth create token vault-auth-delegator \
 #     --duration=8760h > local/vault-k8s-reviewer.token
 export TF_VAR_k8s_token_reviewer_jwt="$(cat "$_vault_tf_dir/../local/vault-k8s-reviewer.token")"

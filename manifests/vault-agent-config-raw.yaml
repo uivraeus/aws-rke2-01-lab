@@ -9,7 +9,7 @@
 #
 # Same agent-configmap contract as manifests/vault-agent-config.yaml (config-init.hcl /
 # config.hcl picked apart by exact filename, identical except exit_after_auth) - see that
-# file's header comment and the README's "Vault Agent Injector" section for the general
+# file's header comment and docs/vault.md's "Vault Agent Injector" section for the general
 # mechanism. Apply before the pod, with ${VAULT_PRIVATE_IP} substituted:
 #
 #   export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)

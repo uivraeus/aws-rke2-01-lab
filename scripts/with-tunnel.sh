@@ -2,9 +2,9 @@
 # Runs a command with a temporary SSM port-forward tunnel open in the background,
 # closing the tunnel afterward regardless of the command's exit status. Used by the
 # Makefile's *-vault targets so they're one-shot (no second shell needed to hold
-# `make tunnel-k8s`/`make tunnel-vault` open) - the manual verification steps in the
-# README still use those long-lived targets directly, since those are meant to stay
-# open across several manual commands.
+# `make tunnel-k8s`/`make tunnel-vault` open) - the manual verification steps in
+# docs/irsa.md and docs/vault.md still use those long-lived targets directly, since
+# those are meant to stay open across several manual commands.
 #
 # Usage: with-tunnel.sh <ssm-tunnel-command> <local-port> -- <command...>
 

@@ -220,7 +220,7 @@ rotate-sa-key: ansible-venv
 
 # Opens an SSM port-forward tunnel so `kubectl --kubeconfig kubeconfig` works from your
 # laptop. Run this in its own shell and leave it running - needed for the manual
-# verification steps in the README (the -vault Terraform targets above manage their
+# verification steps in docs/irsa.md and docs/vault.md (the -vault Terraform targets above manage their
 # own short-lived tunnels and don't need this held open).
 tunnel-k8s:
 	cd $(TF_DIR) && eval $$(terraform output -raw tunnel_command)
