@@ -55,3 +55,27 @@ variable "irsa_service_account_name" {
   type        = string
   default     = "irsa-test"
 }
+
+variable "enable_rolesanywhere" {
+  description = "Provision the AWS Roles Anywhere trust anchor/profile/test role and its wiring (see rolesanywhere.tf) - an independent, optional evaluation alongside IRSA and Vault. Defaults to off."
+  type        = bool
+  default     = false
+}
+
+variable "rolesanywhere_namespace" {
+  description = "Kubernetes namespace of the service account used to verify Roles Anywhere."
+  type        = string
+  default     = "rolesanywhere-test"
+}
+
+variable "rolesanywhere_service_account_name" {
+  description = "Kubernetes service account name used to verify Roles Anywhere."
+  type        = string
+  default     = "rolesanywhere-test"
+}
+
+variable "rolesanywhere_sts_duration_seconds" {
+  description = "Session duration for credentials issued via the Roles Anywhere profile. Kept at AWS's own 900s floor by default so cert-manager's rotation of the leaf certificate is observable quickly - raise it back toward AWS's own default (3600) once done evaluating rotation itself."
+  type        = number
+  default     = 900
+}

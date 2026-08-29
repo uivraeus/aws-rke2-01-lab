@@ -91,3 +91,36 @@ output "vault_tunnel_command" {
   description = "Run this (in a separate shell) to reach the Vault API from your laptop - needed for terraform-vault/ runs and for the manual verification steps, if enabled."
   value       = var.enable_vault ? "aws ssm start-session --profile ${var.aws_profile} --region ${var.aws_region} --target ${aws_instance.vault[0].id} --document-name AWS-StartPortForwardingSession --parameters '{\"portNumber\":[\"8200\"],\"localPortNumber\":[\"8200\"]}'" : null
 }
+
+# The six outputs below are null when enable_rolesanywhere = false (see rolesanywhere.tf).
+
+output "rolesanywhere_trust_anchor_arn" {
+  description = "ARN of the Roles Anywhere trust anchor, if enabled."
+  value       = var.enable_rolesanywhere ? aws_rolesanywhere_trust_anchor.cluster[0].arn : null
+}
+
+output "rolesanywhere_profile_arn" {
+  description = "ARN of the Roles Anywhere profile, if enabled."
+  value       = var.enable_rolesanywhere ? aws_rolesanywhere_profile.cluster[0].arn : null
+}
+
+output "rolesanywhere_role_arn" {
+  description = "Role ARN the Roles Anywhere profile assumes for the verification workload, if enabled."
+  value       = var.enable_rolesanywhere ? aws_iam_role.rolesanywhere_test[0].arn : null
+}
+
+output "rolesanywhere_test_bucket_name" {
+  description = "Private bucket the Roles Anywhere-issued role can read/write, used to verify the credential chain end to end, if enabled."
+  value       = var.enable_rolesanywhere ? aws_s3_bucket.rolesanywhere_test[0].bucket : null
+}
+
+output "rolesanywhere_ca_cert_pem" {
+  description = "PEM-encoded certificate of the Roles Anywhere root CA - load into cert-manager's ClusterIssuer (see manifests/rolesanywhere-ca-issuer.yaml), if enabled."
+  value       = var.enable_rolesanywhere ? tls_self_signed_cert.rolesanywhere_ca[0].cert_pem : null
+}
+
+output "rolesanywhere_ca_key_pem" {
+  description = "PEM-encoded private key of the Roles Anywhere root CA - load into cert-manager's ClusterIssuer (see manifests/rolesanywhere-ca-issuer.yaml), if enabled. Sensitive: this is the key that can mint certificates AWS will trust."
+  value       = var.enable_rolesanywhere ? tls_private_key.rolesanywhere_ca[0].private_key_pem : null
+  sensitive   = true
+}
