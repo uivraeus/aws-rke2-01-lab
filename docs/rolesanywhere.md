@@ -179,12 +179,17 @@ Set `enable_rolesanywhere = true` in `terraform.tfvars` first, then:
 
 ```sh
 make bootstrap-k8s     # if not already done
-cd terraform && terraform apply   # provisions the CA/trust anchor/profile/test role,
-                                   # and registers the x509SAN/URI attribute mapping via
-                                   # the terraform_data workaround (see "The workload-id://
-                                   # convention" above) - no separate step needed for that
 make cert-manager       # if not already installed (also needed for irsa.md's webhook)
 ```
+
+`make bootstrap-k8s` (`apply-k8s` + `ansible-k8s`) already runs `terraform apply` against
+this same `terraform/` root as its first step, so it alone provisions the CA/trust
+anchor/profile/test role and registers the `x509SAN`/`URI` attribute mapping (the
+`terraform_data` workaround - see "The `workload-id://` convention" above) - no separate
+`terraform apply` needed. If the base cluster is already bootstrapped and you're only now
+flipping `enable_rolesanywhere` on, run `cd terraform && terraform apply` by itself instead
+of the full `make bootstrap-k8s` - it picks up the newly-gated resources without re-running
+Ansible/RKE2 install for no reason.
 
 Then load the CA into cert-manager and apply the test workload (open
 `make tunnel-k8s` in another shell first):
