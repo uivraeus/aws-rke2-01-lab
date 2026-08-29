@@ -22,3 +22,6 @@ kubeconfig
 
 # Vault root token / unseal keys / AppRole credentials - never commit these
 /local/
+
+# Personal agent settings
+.claude/
