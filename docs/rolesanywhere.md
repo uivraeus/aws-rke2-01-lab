@@ -75,12 +75,24 @@ exactly why this needed a deliberate choice.
 describing default rules that include `x509SAN`'s `URI` specifier
 (confirmed live: a freshly created `aws_rolesanywhere_profile` returns
 `attributeMappings: null` from `GetProfile`, and `AssumeRole` fails for
-every request until the mapping is set explicitly). The
-`hashicorp/aws` provider's `aws_rolesanywhere_profile` resource also has no
-argument for this at all - it isn't a Terraform coverage gap in this repo's
-code, the resource schema simply doesn't expose
-`PutAttributeMapping`/`DeleteAttributeMapping` yet. So this one step has to
-be run by hand, once, outside Terraform - see "Bootstrap sequence" below.
+every request until the mapping is set explicitly). The `hashicorp/aws`
+provider's `aws_rolesanywhere_profile` resource has no argument for this at
+all - confirmed against the provider's own source
+(`internal/service/rolesanywhere/` only implements `profile.go` and
+`trust_anchor.go`) - even though the underlying AWS API, and
+CloudFormation's own `AWS::RolesAnywhere::Profile`, both support it; this is
+specifically a `hashicorp/aws` coverage gap, not an AWS or Terraform-in-general
+limitation. It's a known, filed gap -
+[hashicorp/terraform-provider-aws#48211](https://github.com/hashicorp/terraform-provider-aws/issues/48211)
+already has an implementation sitting in
+[PR #48493](https://github.com/hashicorp/terraform-provider-aws/pull/48493),
+stuck only on a maintainer running acceptance tests. Until that ships, this
+repo works around it with a `terraform_data` + `local-exec` resource right
+after `aws_rolesanywhere_profile` in
+[`rolesanywhere.tf`](../terraform/rolesanywhere.tf) (see its own comment for
+the reasoning and its real limitation - no drift detection/repair, since a
+`local-exec` provisioner has no read step) - delete it once #48211 lands in
+a release.
 
 This repo uses a **URI Subject Alternative Name**, shaped like a SPIFFE ID
 but under a custom scheme:
@@ -167,22 +179,11 @@ Set `enable_rolesanywhere = true` in `terraform.tfvars` first, then:
 
 ```sh
 make bootstrap-k8s     # if not already done
-cd terraform && terraform apply   # provisions the CA/trust anchor/profile/test role
+cd terraform && terraform apply   # provisions the CA/trust anchor/profile/test role,
+                                   # and registers the x509SAN/URI attribute mapping via
+                                   # the terraform_data workaround (see "The workload-id://
+                                   # convention" above) - no separate step needed for that
 make cert-manager       # if not already installed (also needed for irsa.md's webhook)
-```
-
-**Required one-time step, outside Terraform**: register the `x509SAN`/`URI`
-attribute mapping on the profile (see "The `workload-id://` convention"
-above for why this can't be expressed in Terraform yet). Without this, every
-`AssumeRole` fails, regardless of how correct the trust policy's condition
-is - the certificate's URI SAN is never turned into a principal tag for the
-condition to match against in the first place:
-
-```sh
-aws rolesanywhere put-attribute-mapping \
-  --profile-id "$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn | awk -F/ '{print $NF}')" \
-  --certificate-field x509SAN \
-  --mapping-rules specifier=URI
 ```
 
 Then load the CA into cert-manager and apply the test workload (open

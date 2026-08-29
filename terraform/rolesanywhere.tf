@@ -75,6 +75,61 @@ resource "aws_rolesanywhere_profile" "cluster" {
   duration_seconds = var.rolesanywhere_sts_duration_seconds
 }
 
+# --- TEMPORARY WORKAROUND: aws_rolesanywhere_profile has no attribute_mappings argument in
+# hashicorp/terraform-provider-aws (confirmed from the provider's own source -
+# internal/service/rolesanywhere/ only implements profile.go and trust_anchor.go, no
+# attribute-mapping resource at all), even though the underlying AWS API and
+# CloudFormation's own AWS::RolesAnywhere::Profile both support it - awscc_rolesanywhere_profile
+# (the CloudFormation-Cloud-Control-API-generated provider) already has it natively. Without
+# this, every Roles Anywhere session fails with a generic AccessDeniedException regardless
+# of how correct the trust policy's condition is - the certificate's SAN is never turned
+# into a principal tag for that condition to match against (see docs/rolesanywhere.md).
+#
+# Tracked upstream: https://github.com/hashicorp/terraform-provider-aws/issues/48211 - an
+# implementation already exists (https://github.com/hashicorp/terraform-provider-aws/pull/48493),
+# stuck only on a maintainer running acceptance tests (the author has no AWS account with
+# Roles Anywhere access). Delete this resource and switch to a plain attribute_mappings
+# argument on aws_rolesanywhere_profile once that ships in a release.
+#
+# terraform_data (not a provisioner attached directly to aws_rolesanywhere_profile) so the
+# mapping values themselves are real triggers, not just the profile's id - otherwise this
+# would only ever run once, at creation, exactly like a provisioner on the resource itself
+# (nothing in aws_rolesanywhere_profile's own schema represents "the attribute mapping", so
+# Terraform has no other way to know a change here matters). Deliberately NOT triggered on
+# every apply (e.g. a random/timestamp trigger) either - that would make every `terraform
+# apply` show a diff even when nothing changed. The real limitation this doesn't solve: a
+# local-exec provisioner has no read step, so this can't detect or repair drift if the
+# mapping is changed or removed outside Terraform - acceptable for a workaround with a known
+# removal path, not acceptable as a permanent design.
+
+locals {
+  rolesanywhere_attribute_mapping_field     = "x509SAN"
+  rolesanywhere_attribute_mapping_specifier = "URI"
+}
+
+resource "terraform_data" "rolesanywhere_test_attribute_mapping" {
+  count = var.enable_rolesanywhere ? 1 : 0
+
+  triggers_replace = [
+    aws_rolesanywhere_profile.cluster[0].id,
+    local.rolesanywhere_attribute_mapping_field,
+    local.rolesanywhere_attribute_mapping_specifier,
+  ]
+
+  provisioner "local-exec" {
+    # --profile here is the AWS CLI's SSO profile (var.aws_profile) - unrelated to, and not
+    # to be confused with, the Roles Anywhere "profile" (--profile-id) this command targets.
+    command = join(" ", [
+      "aws rolesanywhere put-attribute-mapping",
+      "--region ${var.aws_region}",
+      "--profile ${var.aws_profile}",
+      "--profile-id ${aws_rolesanywhere_profile.cluster[0].id}",
+      "--certificate-field ${local.rolesanywhere_attribute_mapping_field}",
+      "--mapping-rules specifier=${local.rolesanywhere_attribute_mapping_specifier}",
+    ])
+  }
+}
+
 # --- IAM role assumable via Roles Anywhere by the verification workload ---
 #
 # Scoped to only the test bucket below, for one specific workload identity - see
