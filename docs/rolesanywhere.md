@@ -45,10 +45,17 @@ What gets provisioned when `enable_rolesanywhere = true`:
   `duration_seconds` (`rolesanywhere_sts_duration_seconds` var, default
   `900`, AWS's own floor) kept short.
 - **Roles Anywhere test role** (`rolesanywhere_role_arn` output) - trusts
-  `rolesanywhere.amazonaws.com` via `sts:AssumeRole` + `sts:TagSession`,
-  scoped to sessions from this trust anchor whose certificate carries one
-  specific `workload-id://` URI SAN (see below), with access to only the
-  test bucket below.
+  `rolesanywhere.amazonaws.com` via `sts:AssumeRole` + `sts:TagSession` +
+  `sts:SetSourceIdentity`, scoped to sessions from this trust anchor whose
+  certificate carries one specific `workload-id://` URI SAN (see below), with
+  access to only the test bucket below. `sts:SetSourceIdentity` isn't
+  optional in practice, despite reading like it might only matter if you
+  care about source identity - Roles Anywhere always sets one (from the
+  certificate's Subject CN), so a trust policy missing this action fails
+  every `AssumeRole` with a generic `AccessDeniedException: Unable to assume
+  role for <arn>` (confirmed live - it gives no hint that source identity is
+  the missing piece, and the error is identical to what a wrong/missing
+  `PrincipalTag` condition produces).
 - **Test bucket** (`rolesanywhere_test_bucket_name` output) - private
   bucket used purely to prove the Roles Anywhere chain works end to end.
 
@@ -56,13 +63,24 @@ What gets provisioned when `enable_rolesanywhere = true`:
 
 Each Roles Anywhere IAM role needs a trust-policy condition that scopes it
 to exactly one certificate identity - the same job IRSA's `sub`-claim
-condition does in [`irsa.tf`](../terraform/irsa.tf). Roles Anywhere
-auto-populates a session's principal tags from the presented certificate's
+condition does in [`irsa.tf`](../terraform/irsa.tf). Roles Anywhere can
+populate a session's principal tags from the presented certificate's
 Subject/SAN fields once `sts:TagSession` is granted, so any of those fields
 can be used as the condition variable
 (`aws:PrincipalTag/x509Subject/CN`, `.../x509Subject/O`,
 `.../x509SAN/URI`, ...) - there's no single required field, which is
 exactly why this needed a deliberate choice.
+
+**This mapping is not actually automatic**, despite AWS's own docs
+describing default rules that include `x509SAN`'s `URI` specifier
+(confirmed live: a freshly created `aws_rolesanywhere_profile` returns
+`attributeMappings: null` from `GetProfile`, and `AssumeRole` fails for
+every request until the mapping is set explicitly). The
+`hashicorp/aws` provider's `aws_rolesanywhere_profile` resource also has no
+argument for this at all - it isn't a Terraform coverage gap in this repo's
+code, the resource schema simply doesn't expose
+`PutAttributeMapping`/`DeleteAttributeMapping` yet. So this one step has to
+be run by hand, once, outside Terraform - see "Bootstrap sequence" below.
 
 This repo uses a **URI Subject Alternative Name**, shaped like a SPIFFE ID
 but under a custom scheme:
@@ -128,6 +146,21 @@ namespace needs its own `reports` ServiceAccount to get its own, differently
 Nothing about the CA/cert-manager wiring changes as workloads are added -
 only new `Certificate`/`aws_iam_role` pairs, one per workload identity.
 
+**One more gotcha the URI-SAN-only design above runs into**: Roles Anywhere
+does not accept certificates with an empty Subject, even though
+[RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280) explicitly permits
+one when the SAN extension is present and marked critical, and cert-manager
+happily issues exactly that (an empty Subject is what you get from a
+`Certificate` with no `commonName`/`subject` set, which is what a
+URI-SAN-only identity naturally looks like). AWS's own docs say so plainly -
+["Certificates with empty subjects are NOT yet supported"](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/trust-model.html)
+- and confirmed live: every `AssumeRole` fails with the same generic
+`AccessDeniedException`, even against a fully unconditioned trust policy.
+Every `Certificate` in this repo therefore sets a `commonName` purely to
+satisfy that constraint - see `rolesanywhere-test.yaml`'s comment on the
+field. It plays no role in authorization here; the URI SAN remains the only
+thing any trust policy condition actually matches on.
+
 ## Bootstrap sequence
 
 Set `enable_rolesanywhere = true` in `terraform.tfvars` first, then:
@@ -136,6 +169,20 @@ Set `enable_rolesanywhere = true` in `terraform.tfvars` first, then:
 make bootstrap-k8s     # if not already done
 cd terraform && terraform apply   # provisions the CA/trust anchor/profile/test role
 make cert-manager       # if not already installed (also needed for irsa.md's webhook)
+```
+
+**Required one-time step, outside Terraform**: register the `x509SAN`/`URI`
+attribute mapping on the profile (see "The `workload-id://` convention"
+above for why this can't be expressed in Terraform yet). Without this, every
+`AssumeRole` fails, regardless of how correct the trust policy's condition
+is - the certificate's URI SAN is never turned into a principal tag for the
+condition to match against in the first place:
+
+```sh
+aws rolesanywhere put-attribute-mapping \
+  --profile-id "$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn | awk -F/ '{print $NF}')" \
+  --certificate-field x509SAN \
+  --mapping-rules specifier=URI
 ```
 
 Then load the CA into cert-manager and apply the test workload (open
@@ -166,6 +213,21 @@ apply-time placeholders, and an unrestricted `envsubst` would happily
 "substitute" any other `$name`-shaped token it finds in those scripts too,
 using whatever (usually empty) value that name happens to have in your
 shell - silently corrupting the script rather than erroring.
+
+**Confirmed live** (2026-08-29, `rke2-lab` in `eu-north-1`): the full chain
+below worked end to end - `get-caller-identity` returning the expected
+assumed-role ARN, scoped S3 access allowed on the Roles Anywhere test
+bucket and denied on the IRSA one, and rotation confirmed via a forced
+cert-manager renewal. Getting there took two fixes beyond the trust policy
+this doc's Terraform ships (both already folded into
+[`rolesanywhere.tf`](../terraform/rolesanywhere.tf) and
+[`rolesanywhere-test.yaml`](../manifests/rolesanywhere-test.yaml), and
+called out inline above): the `x509SAN`/`URI` attribute mapping, and
+`sts:SetSourceIdentity` in the trust policy's actions. Both failures looked
+identical from the outside - the same generic
+`AccessDeniedException: Unable to assume role for <arn>`, with no signal
+pointing at which piece was missing - which is why they're documented as
+prominently as the working configuration itself.
 
 ## Manual verification
 
@@ -227,15 +289,41 @@ kubectl --kubeconfig kubeconfig -n rolesanywhere-test delete secret rolesanywher
 cert-manager notices the Secret is gone and reissues immediately (or use
 [`cmctl renew rolesanywhere-test -n rolesanywhere-test`](https://cert-manager.io/docs/reference/cmctl/#renew)
 if `cmctl` is installed, which renews in place without deleting the Secret
-first). Either way, `aws_signing_helper` re-reads the certificate/key files
-fresh on every invocation - it isn't a daemon caching them in memory - so
-the very next time the AWS CLI's cached STS credentials near their own
-(900s) expiry and re-invokes `credential_process`, it signs with the new
-certificate automatically. No pod restart, no sidecar analogous to the
-Vault Agent Injector needed - confirm by re-running `aws sts get-caller-identity`
-a few minutes after forcing the renewal and checking the response still
-succeeds (the underlying certificate changed even though nothing in the pod
-did).
+first). `aws_signing_helper` itself re-reads the certificate/key files fresh
+on every invocation - it isn't a daemon caching them in memory - so the very
+next `credential_process` invocation signs with the new certificate
+automatically. No pod restart, no sidecar analogous to the Vault Agent
+Injector needed.
+
+**Confirming this without waiting out the full session duration is trickier
+than it sounds** (confirmed live): simply re-running
+`aws sts get-caller-identity` right after forcing the renewal still shows
+the *old* certificate's identity, because the AWS CLI caches the credentials
+`credential_process` returned and won't re-invoke it until they're close to
+expiring - this is expected CLI behavior, not a sign rotation didn't work.
+The session name in `GetCallerIdentity`'s response is always the
+hex-encoded serial number of whichever certificate authenticated it (a
+Roles Anywhere convention), so the most direct proof is to bypass the CLI's
+cache and invoke the helper directly, twice - once before, once after
+forcing renewal:
+
+```sh
+kubectl --kubeconfig kubeconfig exec -n rolesanywhere-test -it rolesanywhere-test -- sh -c '
+  /opt/bin/aws_signing_helper credential-process \
+    --certificate /rolesanywhere/tls.crt --private-key /rolesanywhere/tls.key \
+    --trust-anchor-arn '"$ROLESANYWHERE_TRUST_ANCHOR_ARN"' \
+    --profile-arn '"$ROLESANYWHERE_PROFILE_ARN"' --role-arn '"$ROLESANYWHERE_ROLE_ARN"' \
+    --region '"$AWS_REGION"' \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)[\"AccessKeyId\"])"
+'
+```
+
+Compare the certificate's own serial
+(`openssl x509 -noout -serial -in <(kubectl ... get secret rolesanywhere-test-tls -o jsonpath=... | base64 -d)`)
+against the session name in a fresh `aws sts get-caller-identity` run using
+those exact credentials - they match after rotation, proving the helper
+picked up the new certificate, independent of whatever the CLI's own cache
+is still holding onto.
 
 ## Not yet done
 

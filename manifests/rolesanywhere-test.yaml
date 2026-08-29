@@ -52,7 +52,21 @@ spec:
   issuerRef:
     name: rolesanywhere-ca
     kind: ClusterIssuer
-  # No commonName/organizations - identity here is carried entirely by the URI SAN below.
+  # cert-manager's own default (digital signature + key encipherment) omits clientAuth -
+  # Roles Anywhere doesn't reject its absence outright, but AWS's own signing helper and
+  # trust model assume an end-entity client-authentication certificate, so it's set
+  # explicitly rather than relying on the default.
+  usages:
+    - digital signature
+    - key encipherment
+    - client auth
+  # commonName is NOT part of the identity this repo authorizes on (that's the URI SAN
+  # below) - it exists only because Roles Anywhere does not support certificates with an
+  # empty Subject (confirmed live: AssumeRole fails generically for every request against
+  # an empty-Subject cert, even with a fully permissive trust policy - see
+  # docs.aws.amazon.com/rolesanywhere's trust-model page, "Certificates with empty subjects
+  # are NOT yet supported"). Any non-empty value works; this one is just human-readable.
+  commonName: rolesanywhere-test
   # SPIFFE-shaped (trust-domain + namespace + service account), but under a custom
   # workload-id:// scheme rather than literal spiffe:// - see docs/rolesanywhere.md for why
   # (no SPIRE/Workload API/trust-bundle federation backs this, just a cert-manager-issued

@@ -89,8 +89,13 @@ data "aws_iam_policy_document" "rolesanywhere_test_trust" {
   count = var.enable_rolesanywhere ? 1 : 0
 
   statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole", "sts:TagSession"]
+    effect = "Allow"
+    # sts:SetSourceIdentity is not optional in practice: every Roles Anywhere session sets a
+    # source identity from the certificate's Subject CN (confirmed live - omitting this
+    # action from the trust policy makes AssumeRole fail with a generic "Unable to assume
+    # role" for every request, not a source-identity-specific error, which makes it easy to
+    # miss).
+    actions = ["sts:AssumeRole", "sts:TagSession", "sts:SetSourceIdentity"]
 
     principals {
       type        = "Service"
