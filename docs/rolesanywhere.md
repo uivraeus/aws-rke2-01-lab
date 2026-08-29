@@ -179,6 +179,10 @@ Set `enable_rolesanywhere = true` in `terraform.tfvars` first, then:
 
 ```sh
 make bootstrap-k8s     # if not already done
+make tunnel-k8s         # in its own shell, leave it running - cert-manager's Helm install
+                        # below needs `kubectl`/`helm --kubeconfig kubeconfig` to reach the
+                        # cluster, which (per the main README) means localhost:6443 tunneled
+                        # to the control node, not the internet
 make cert-manager       # if not already installed (also needed for irsa.md's webhook)
 ```
 
