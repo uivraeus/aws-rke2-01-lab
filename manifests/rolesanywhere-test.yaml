@@ -1,0 +1,127 @@
+# Manual Roles Anywhere verification.
+#
+# Real X.509 identity comes from cert-manager (see rolesanywhere-ca-issuer.yaml, applied
+# first) - the Certificate below requests a short-lived leaf cert with a workload-id://
+# URI SAN, cert-manager writes it to a Secret, and an initContainer feeds that cert/key to
+# AWS's own aws_signing_helper binary (fetched at pod start - no official image ships it)
+# as a credential_process. Unlike the manual IRSA/Vault verification manifests, this one
+# isn't standing in for a webhook/injector that doesn't exist yet - aws_signing_helper
+# actually *is* the intended way any non-EC2 workload consumes Roles Anywhere.
+#
+# rolesanywhere-test namespace/serviceaccount names below must match
+# var.rolesanywhere_namespace/var.rolesanywhere_service_account_name (defaults:
+# "rolesanywhere-test"/"rolesanywhere-test") - they're baked into the workload-id:// URI
+# the Certificate requests and the IAM role's trust policy condition.
+#
+# Apply after rolesanywhere-ca-issuer.yaml (open `make tunnel-k8s` in another shell first):
+#
+#   export CLUSTER_NAME=$(terraform -chdir=terraform output -raw cluster_name)
+#   export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_trust_anchor_arn)
+#   export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
+#   export ROLESANYWHERE_ROLE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_role_arn)
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw rolesanywhere_test_bucket_name)
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
+#     < manifests/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rolesanywhere-test
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rolesanywhere-test
+  namespace: rolesanywhere-test
+
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: rolesanywhere-test
+  namespace: rolesanywhere-test
+spec:
+  secretName: rolesanywhere-test-tls
+  # 1h/55m are cert-manager's own floor (duration >= 1h, renewBefore >= 5m) - not a
+  # deliberately short window the way Vault's 900s STS TTL is. To observe rotation without
+  # waiting out the hour, force it on demand instead - see docs/rolesanywhere.md.
+  duration: 1h
+  renewBefore: 55m
+  issuerRef:
+    name: rolesanywhere-ca
+    kind: ClusterIssuer
+  # No commonName/organizations - identity here is carried entirely by the URI SAN below.
+  # SPIFFE-shaped (trust-domain + namespace + service account), but under a custom
+  # workload-id:// scheme rather than literal spiffe:// - see docs/rolesanywhere.md for why
+  # (no SPIRE/Workload API/trust-bundle federation backs this, just a cert-manager-issued
+  # leaf cert, so claiming the real spiffe:// scheme would overstate what's actually here).
+  uris:
+    - workload-id://${CLUSTER_NAME}.internal/ns/rolesanywhere-test/sa/rolesanywhere-test
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rolesanywhere-test
+  namespace: rolesanywhere-test
+spec:
+  serviceAccountName: rolesanywhere-test
+  initContainers:
+    # No official image ships aws_signing_helper, so it's fetched at pod start, same
+    # pragmatic vendoring-at-apply-time this repo already does elsewhere (e.g. the
+    # pod-identity-webhook manifest adapted from upstream's raw deploy/*.yaml). Pinned to a
+    # specific release - check https://github.com/aws/rolesanywhere-credential-helper/releases
+    # for newer ones.
+    - name: fetch-signing-helper
+      image: curlimages/curl:8.11.1
+      command:
+        - sh
+        - -c
+        - |
+          set -eu
+          curl -fsSL https://rolesanywhere.amazonaws.com/releases/1.8.5/X86_64/Linux/Amzn2023/aws_signing_helper \
+            -o /opt/bin/aws_signing_helper
+          chmod +x /opt/bin/aws_signing_helper
+
+          mkdir -p /opt/aws
+          cat > /opt/aws/config <<EOF
+          [default]
+          credential_process = /opt/bin/aws_signing_helper credential-process --certificate /rolesanywhere/tls.crt --private-key /rolesanywhere/tls.key --trust-anchor-arn ${ROLESANYWHERE_TRUST_ANCHOR_ARN} --profile-arn ${ROLESANYWHERE_PROFILE_ARN} --role-arn ${ROLESANYWHERE_ROLE_ARN} --region ${AWS_REGION}
+          region = ${AWS_REGION}
+          EOF
+      volumeMounts:
+        - name: signing-helper
+          mountPath: /opt/bin
+        - name: aws-config
+          mountPath: /opt/aws
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: AWS_CONFIG_FILE
+          value: /opt/aws/config
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}
+      volumeMounts:
+        - name: signing-helper
+          mountPath: /opt/bin
+          readOnly: true
+        - name: aws-config
+          mountPath: /opt/aws
+          readOnly: true
+        - name: rolesanywhere-tls
+          mountPath: /rolesanywhere
+          readOnly: true
+  volumes:
+    - name: signing-helper
+      emptyDir: {}
+    - name: aws-config
+      emptyDir: {}
+    - name: rolesanywhere-tls
+      secret:
+        secretName: rolesanywhere-test-tls
