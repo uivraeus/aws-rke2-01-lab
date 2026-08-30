@@ -28,7 +28,8 @@ ANSIBLE_ENV = AWS_PROFILE=$$(terraform -chdir=../$(TF_DIR) output -raw aws_profi
 	restart reboot sync-oidc rotate-sa-key \
 	tunnel-k8s tunnel-vault \
 	create-operator-vault unseal-vault \
-	injector-vault cert-manager pod-identity-webhook
+	injector-vault cert-manager pod-identity-webhook \
+	kyverno
 
 # Creates .ansible-venv if missing and makes sure ansible/boto3/botocore are installed
 # in it. Safe/fast to depend on from every ansible-invoking target: python3 -m venv is
@@ -167,6 +168,18 @@ cert-manager:
 	helm upgrade --install cert-manager jetstack/cert-manager \
 		--namespace cert-manager --create-namespace \
 		--set crds.enabled=true \
+		--kubeconfig kubeconfig
+
+# Kyverno - see docs/rolesanywhere.md's Kyverno section for what it's used for here
+# (automating Certificate creation and guarding against accidental namespace/SAN
+# mismatches). Independent of cert-manager/pod-identity-webhook - no ordering
+# requirement with those targets.
+kyverno:
+	helm repo add kyverno https://kyverno.github.io/kyverno/ >/dev/null 2>&1 || true
+	helm repo update kyverno
+	helm upgrade --install kyverno kyverno/kyverno \
+		--version 3.9.0 \
+		--namespace kyverno --create-namespace \
 		--kubeconfig kubeconfig
 
 # Installs amazon-eks-pod-identity-webhook from manifests/pod-identity-webhook.yaml -

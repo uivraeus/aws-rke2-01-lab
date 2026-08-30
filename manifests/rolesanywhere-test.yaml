@@ -1,27 +1,34 @@
-# Manual Roles Anywhere verification.
+# Roles Anywhere verification.
 #
 # Real X.509 identity comes from cert-manager (see rolesanywhere-ca-issuer.yaml, applied
-# first) - the Certificate below requests a short-lived leaf cert with a workload-id://
-# URI SAN, cert-manager writes it to a Secret, and an initContainer feeds that cert/key to
-# AWS's own aws_signing_helper binary (fetched at pod start - no official image ships it)
-# as a credential_process. Unlike the manual IRSA/Vault verification manifests, this one
-# isn't standing in for a webhook/injector that doesn't exist yet - aws_signing_helper
-# actually *is* the intended way any non-EC2 workload consumes Roles Anywhere.
+# first) - an initContainer feeds the resulting cert/key to AWS's own aws_signing_helper
+# binary (fetched at pod start - no official image ships it) as a credential_process.
+# Unlike the manual IRSA/Vault verification manifests, this one isn't standing in for a
+# webhook/injector that doesn't exist yet - aws_signing_helper actually *is* the intended
+# way any non-EC2 workload consumes Roles Anywhere.
+#
+# The Certificate itself is no longer hand-written here - the ServiceAccount's
+# rke2-lab.internal/rolesanywhere-enabled annotation below triggers
+# manifests/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy to create one
+# automatically, deriving the workload-id:// URI from this ServiceAccount's own
+# namespace/name. Apply kyverno-config.yaml and kyverno-rolesanywhere-policies.yaml first
+# (see docs/rolesanywhere.md's Kyverno section) or the Certificate never appears and the
+# Pod below sits waiting on a Secret that doesn't exist.
 #
 # rolesanywhere-test namespace/serviceaccount names below must match
 # var.rolesanywhere_namespace/var.rolesanywhere_service_account_name (defaults:
 # "rolesanywhere-test"/"rolesanywhere-test") - they're baked into the workload-id:// URI
-# the Certificate requests and the IAM role's trust policy condition.
+# the generated Certificate requests and the IAM role's trust policy condition.
 #
-# Apply after rolesanywhere-ca-issuer.yaml (open `make tunnel-k8s` in another shell first):
+# Apply after rolesanywhere-ca-issuer.yaml and the Kyverno policies (open `make tunnel-k8s`
+# in another shell first):
 #
-#   export CLUSTER_NAME=$(terraform -chdir=terraform output -raw cluster_name)
 #   export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_trust_anchor_arn)
 #   export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
 #   export ROLESANYWHERE_ROLE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_role_arn)
 #   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw rolesanywhere_test_bucket_name)
 #   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-#   envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
+#   envsubst '${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
 #     < manifests/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 
 apiVersion: v1
@@ -35,44 +42,13 @@ kind: ServiceAccount
 metadata:
   name: rolesanywhere-test
   namespace: rolesanywhere-test
-
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: rolesanywhere-test
-  namespace: rolesanywhere-test
-spec:
-  secretName: rolesanywhere-test-tls
-  # 1h/55m are cert-manager's own floor (duration >= 1h, renewBefore >= 5m) - not a
-  # deliberately short window the way Vault's 900s STS TTL is. To observe rotation without
-  # waiting out the hour, force it on demand instead - see docs/rolesanywhere.md.
-  duration: 1h
-  renewBefore: 55m
-  issuerRef:
-    name: rolesanywhere-ca
-    kind: ClusterIssuer
-  # cert-manager's own default (digital signature + key encipherment) omits clientAuth -
-  # Roles Anywhere doesn't reject its absence outright, but AWS's own signing helper and
-  # trust model assume an end-entity client-authentication certificate, so it's set
-  # explicitly rather than relying on the default.
-  usages:
-    - digital signature
-    - key encipherment
-    - client auth
-  # commonName is NOT part of the identity this repo authorizes on (that's the URI SAN
-  # below) - it exists only because Roles Anywhere does not support certificates with an
-  # empty Subject (confirmed live: AssumeRole fails generically for every request against
-  # an empty-Subject cert, even with a fully permissive trust policy - see
-  # docs.aws.amazon.com/rolesanywhere's trust-model page, "Certificates with empty subjects
-  # are NOT yet supported"). Any non-empty value works; this one is just human-readable.
-  commonName: rolesanywhere-test
-  # SPIFFE-shaped (trust-domain + namespace + service account), but under a custom
-  # workload-id:// scheme rather than literal spiffe:// - see docs/rolesanywhere.md for why
-  # (no SPIRE/Workload API/trust-bundle federation backs this, just a cert-manager-issued
-  # leaf cert, so claiming the real spiffe:// scheme would overstate what's actually here).
-  uris:
-    - workload-id://${CLUSTER_NAME}.internal/ns/rolesanywhere-test/sa/rolesanywhere-test
+  annotations:
+    # Triggers manifests/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy to create
+    # a matching Certificate automatically (workload-id://.../ns/rolesanywhere-test/sa/rolesanywhere-test,
+    # SPIFFE-shaped but under a custom scheme - see docs/rolesanywhere.md for why not
+    # literal spiffe://). Reuses this repo's existing custom annotation prefix from the
+    # IRSA pod-identity-webhook (docs/irsa.md) rather than inventing a new one.
+    rke2-lab.internal/rolesanywhere-enabled: "true"
 
 ---
 apiVersion: v1

@@ -1,0 +1,117 @@
+# Kyverno automation + misconfiguration guard for the Roles Anywhere path - see
+# docs/rolesanywhere.md's Kyverno section for the full write-up. Two independent policies:
+#
+# - GeneratingPolicy: watches ServiceAccounts for an opt-in annotation
+#   (rke2-lab.internal/rolesanywhere-enabled: "true" - reusing this repo's existing custom
+#   annotation prefix from the IRSA pod-identity-webhook, see docs/irsa.md) and generates a
+#   cert-manager Certificate for it automatically, deriving the workload-id:// URI from the
+#   ServiceAccount's own namespace/name - the same value a human would otherwise have to
+#   type by hand in two places (the Certificate and the matching IAM trust policy condition
+#   in terraform/rolesanywhere.tf) without any guarantee they stay in sync.
+# - ValidatingPolicy: rejects any Certificate that targets the rolesanywhere-ca ClusterIssuer
+#   but whose spec.uris doesn't match its own namespace - a guard against an accidentally
+#   mistyped or copy-pasted hand-written Certificate, not a defense against a deliberate,
+#   already-RBAC-authorized attempt to bypass it (that operator could just edit or delete
+#   this policy). Deliberately scoped to only Certificates using rolesanywhere-ca, so it
+#   can't interfere with pod-identity-webhook's own, unrelated self-signed cert-manager
+#   Certificate.
+#
+# Both use the current, stable CEL-based GeneratingPolicy/ValidatingPolicy CRDs
+# (policies.kyverno.io/v1), not the older ClusterPolicy generate/validate rule style -
+# ClusterPolicy was deprecated in Kyverno 1.17 (Feb 2026) with removal planned for 1.20
+# (Oct 2026).
+#
+# CAVEAT: GeneratingPolicy/ValidatingPolicy only went stable in that same 1.17 release, so
+# this is a best-effort draft cross-checked against Kyverno's current docs, not yet verified
+# against a live cluster - in particular, the exact cross-resource ConfigMap lookup
+# (resource.Get(...) below) and the generate template's interpolation syntax are the parts
+# most likely to need adjustment once actually applied. Confirm with
+# `kubectl get generatingpolicy,validatingpolicy` (both should report a ready/valid status,
+# not a CEL compile error) before trusting this file - see docs/rolesanywhere.md.
+#
+# Apply once, after manifests/kyverno-config.yaml (this reads that ConfigMap):
+#
+#   kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-policies.yaml
+
+apiVersion: policies.kyverno.io/v1
+kind: GeneratingPolicy
+metadata:
+  name: rolesanywhere-generate-certificate
+spec:
+  evaluation:
+    synchronize:
+      enabled: true
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: ['CREATE', 'UPDATE']
+        resources: ['serviceaccounts']
+  matchConditions:
+    - name: opted-in
+      expression: >-
+        has(object.metadata.annotations) &&
+        object.metadata.annotations['rke2-lab.internal/rolesanywhere-enabled'] == 'true'
+  variables:
+    - name: saNamespace
+      expression: 'object.metadata.namespace'
+    - name: saName
+      expression: 'object.metadata.name'
+    - name: clusterName
+      expression: 'resource.Get("v1", "configmaps", "kyverno", "cluster-config").data.clusterName'
+    - name: workloadUri
+      expression: >-
+        "workload-id://" + variables.clusterName + ".internal/ns/" + variables.saNamespace + "/sa/" + variables.saName
+  generate:
+    - template:
+        interpolate: cel
+        value: |
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: (( variables.saName ))
+            namespace: (( variables.saNamespace ))
+          spec:
+            secretName: (( variables.saName ))-tls
+            duration: 1h
+            renewBefore: 55m
+            usages:
+              - digital signature
+              - key encipherment
+              - client auth
+            # Non-empty Subject required by Roles Anywhere (see docs/rolesanywhere.md) -
+            # not part of the identity anything actually authorizes on, that's the URI below.
+            commonName: (( variables.saName ))
+            issuerRef:
+              name: rolesanywhere-ca
+              kind: ClusterIssuer
+            uris:
+              - (( variables.workloadUri ))
+
+---
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: rolesanywhere-certificate-namespace-guard
+spec:
+  validationActions: [Deny]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['cert-manager.io']
+        apiVersions: ['v1']
+        operations: ['CREATE', 'UPDATE']
+        resources: ['certificates']
+  matchConditions:
+    - name: targets-rolesanywhere-ca
+      expression: >-
+        has(object.spec.issuerRef) &&
+        object.spec.issuerRef.name == 'rolesanywhere-ca' &&
+        object.spec.issuerRef.kind == 'ClusterIssuer'
+  validations:
+    - expression: >-
+        has(object.spec.uris) && size(object.spec.uris) > 0 &&
+        object.spec.uris[0].contains('/ns/' + object.metadata.namespace + '/')
+      message: >-
+        This Certificate's spec.uris must contain "/ns/<this Certificate's own
+        namespace>/" - it looks like it's requesting a workload-id:// identity for a
+        different namespace than the one it's actually being created in.
