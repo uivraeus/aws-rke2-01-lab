@@ -141,10 +141,12 @@ namespace needs its own `reports` ServiceAccount to get its own, differently
 
 1. No change to the CA, trust anchor, or `ClusterIssuer` - all three are
    already shared across every namespace.
-2. Add a `Certificate` in the `billing` namespace requesting
-   `uris: [workload-id://<cluster_name>.internal/ns/billing/sa/reports]`,
-   same as `rolesanywhere-test.yaml`'s but with different `metadata.namespace`
-   and URI path segments.
+2. Add the `reports` `ServiceAccount` in the `billing` namespace with
+   `rke2-lab.internal/rolesanywhere-enabled: "true"` annotated on it - see
+   "Automation and a misconfiguration guard (Kyverno)" below. No `Certificate`
+   to hand-write: the `GeneratingPolicy` derives
+   `workload-id://<cluster_name>.internal/ns/billing/sa/reports` from the
+   ServiceAccount's own namespace/name and creates one automatically.
 3. Add a new `aws_iam_role` + trust policy in Terraform, identical in shape
    to `rolesanywhere_test`'s but with
    `aws:PrincipalTag/x509SAN/URI` = `workload-id://<cluster_name>.internal/ns/billing/sa/reports`,
@@ -155,8 +157,11 @@ namespace needs its own `reports` ServiceAccount to get its own, differently
    actually assumes is chosen at credential-helper invocation time via
    `--role-arn`, same as `rolesanywhere-test.yaml`'s initContainer does.
 
-Nothing about the CA/cert-manager wiring changes as workloads are added -
-only new `Certificate`/`aws_iam_role` pairs, one per workload identity.
+Nothing about the CA/cert-manager/Kyverno wiring changes as workloads are
+added - only a new annotated `ServiceAccount` and a new `aws_iam_role`, one
+pair per workload identity. The `Certificate` itself is generated, not
+authored, so step 2 above can no longer drift from step 3 the way a
+hand-typed URI in two separate files could.
 
 **One more gotcha the URI-SAN-only design above runs into**: Roles Anywhere
 does not accept certificates with an empty Subject, even though
@@ -173,17 +178,83 @@ satisfy that constraint - see `rolesanywhere-test.yaml`'s comment on the
 field. It plays no role in authorization here; the URI SAN remains the only
 thing any trust policy condition actually matches on.
 
+## Automation and a misconfiguration guard (Kyverno)
+
+Two related gaps in the design above, addressed with
+[Kyverno](https://kyverno.io/) (CNCF Graduated as of March 2026):
+
+- Every workload still meant hand-writing a `Certificate` (as in the worked
+  example above), with its URI SAN typed by hand in two separate places -
+  the `Certificate` itself and the matching IAM trust policy condition in
+  Terraform - with nothing to stop them drifting apart.
+- Nothing stopped a `Certificate` in namespace A from requesting a URI SAN
+  claiming namespace B's identity in the first place - cert-manager signs
+  whatever `spec.uris` says, with no notion that it should match the
+  requesting namespace.
+
+[`manifests/kyverno-rolesanywhere-policies.yaml`](../manifests/kyverno-rolesanywhere-policies.yaml)
+has two policies:
+
+- **`GeneratingPolicy`** - watches `ServiceAccount`s for the
+  `rke2-lab.internal/rolesanywhere-enabled: "true"` annotation (reusing this
+  repo's existing custom annotation prefix from the IRSA pod-identity-webhook,
+  see [irsa.md](irsa.md)) and generates a matching `Certificate`
+  automatically, deriving the `workload-id://` URI from the ServiceAccount's
+  own namespace/name via [`manifests/kyverno-config.yaml`](../manifests/kyverno-config.yaml)'s
+  `cluster-config` `ConfigMap` (a `GeneratingPolicy`'s CEL has no way to read
+  a Terraform output directly, so the cluster name is bridged across the
+  same way `local_file.ansible_terraform_vars` already bridges other
+  Terraform values into Ansible). `rolesanywhere-test.yaml`'s `Certificate`
+  block is gone as of this policy - only the `ServiceAccount`'s annotation
+  remains.
+- **`ValidatingPolicy`** - rejects any `Certificate` targeting the
+  `rolesanywhere-ca` `ClusterIssuer` whose `spec.uris` doesn't match its own
+  namespace. Deliberately scoped to that one `ClusterIssuer` specifically
+  (via a `matchConditions` check on `spec.issuerRef.name`), so it can't
+  interfere with `pod-identity-webhook`'s own, unrelated self-signed
+  cert-manager `Certificate` ([irsa.md](irsa.md)).
+
+**Both target *accidental* misconfiguration - typos, a copy-pasted
+`Certificate` with the wrong namespace left in - not a defense against a
+deliberate, already-RBAC-authorized attempt to bypass them.** Anyone with
+`Certificate`-create RBAC could disable the `ValidatingPolicy` outright, or
+delete/recreate a `Secret` across namespaces regardless of what minted it in
+the first place - see the note on cert-manager's own `Secret`-based
+mechanics under "Not yet done" below for why that residual gap exists
+independent of Kyverno entirely, and isn't something an admission-time
+policy on `Certificate`/`CertificateRequest` objects can close.
+
+**Current, not deprecated, Kyverno API**: both policies use the CEL-based
+`policies.kyverno.io/v1` `GeneratingPolicy`/`ValidatingPolicy` CRDs, not the
+older `ClusterPolicy` generate/validate rule style - `ClusterPolicy` was
+deprecated in Kyverno 1.17 (Feb 2026), with removal planned for 1.20 (Oct
+2026). Confirm with `kubectl get generatingpolicy,validatingpolicy` that
+both report a ready/valid status (not a CEL compile error) before trusting
+this file - see its own header comment for the parts most likely to need
+adjustment, since these CRDs only went stable a few months before this was
+written and haven't been battle-tested here as thoroughly as the rest of
+this doc.
+
+**What this does *not* automate**: the actual pod-level wiring - the
+`fetch-signing-helper` initContainer, the volume mounts, `AWS_CONFIG_FILE`
+- stays exactly as hand-written as it is in `rolesanywhere-test.yaml`'s
+`Pod` spec. Automating that would mean *mutating* a Pod at admission time
+(closer to what `amazon-eks-pod-identity-webhook` does for IRSA - Kyverno
+has a `MutatingPolicy` CRD that could do this too) - a distinct, larger
+piece of work, not built here.
+
 ## Bootstrap sequence
 
 Set `enable_rolesanywhere = true` in `terraform.tfvars` first, then:
 
 ```sh
 make bootstrap-k8s     # if not already done
-make tunnel-k8s         # in its own shell, leave it running - cert-manager's Helm install
-                        # below needs `kubectl`/`helm --kubeconfig kubeconfig` to reach the
-                        # cluster, which (per the main README) means localhost:6443 tunneled
-                        # to the control node, not the internet
+make tunnel-k8s         # in its own shell, leave it running - the Helm installs below need
+                        # `kubectl`/`helm --kubeconfig kubeconfig` to reach the cluster,
+                        # which (per the main README) means localhost:6443 tunneled to the
+                        # control node, not the internet
 make cert-manager       # if not already installed (also needed for irsa.md's webhook)
+make kyverno             # if not already installed
 ```
 
 `make bootstrap-k8s` (`apply-k8s` + `ansible-k8s`) already runs `terraform apply` against
@@ -195,8 +266,8 @@ flipping `enable_rolesanywhere` on, run `cd terraform && terraform apply` by its
 of the full `make bootstrap-k8s` - it picks up the newly-gated resources without re-running
 Ansible/RKE2 install for no reason.
 
-Then load the CA into cert-manager and apply the test workload (open
-`make tunnel-k8s` in another shell first):
+Then load the CA into cert-manager, wire up the Kyverno policies, and apply
+the test workload (open `make tunnel-k8s` in another shell first):
 
 ```sh
 export ROLESANYWHERE_CA_CERT_B64=$(terraform -chdir=terraform output -raw rolesanywhere_ca_cert_pem | base64 -w0)
@@ -205,13 +276,18 @@ envsubst '${ROLESANYWHERE_CA_CERT_B64} ${ROLESANYWHERE_CA_KEY_B64}' \
   < manifests/rolesanywhere-ca-issuer.yaml | kubectl --kubeconfig kubeconfig apply -f -
 
 export CLUSTER_NAME=$(terraform -chdir=terraform output -raw cluster_name)
+envsubst '${CLUSTER_NAME}' < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-policies.yaml
+kubectl --kubeconfig kubeconfig get generatingpolicy,validatingpolicy   # both should show a ready/valid status
+
 export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_trust_anchor_arn)
 export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
 export ROLESANYWHERE_ROLE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_role_arn)
 export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw rolesanywhere_test_bucket_name)
 export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
+envsubst '${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
   < manifests/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+kubectl --kubeconfig kubeconfig -n rolesanywhere-test get certificate rolesanywhere-test   # generated automatically - see below
 ```
 
 The restricted `envsubst '...'` form (an explicit list of names, not a bare
@@ -241,9 +317,13 @@ prominently as the working configuration itself.
 
 ## Manual verification
 
-1. Confirm the cert-manager `Certificate` actually issued (a `False`
-   `Ready` condition here means the `ClusterIssuer` from the step above
-   isn't in place yet, or the CA Secret's `tls.crt`/`tls.key` don't match):
+1. Confirm the `Certificate` was actually generated (by the `GeneratingPolicy`,
+   from the `ServiceAccount`'s annotation - there's no `Certificate` in
+   `rolesanywhere-test.yaml` itself to apply) and issued. Missing entirely
+   means the `GeneratingPolicy` didn't fire - check its own status and the
+   `ServiceAccount`'s annotation first; present but `Ready: False` means the
+   `ClusterIssuer` from the step above isn't in place yet, or the CA
+   Secret's `tls.crt`/`tls.key` don't match:
 
    ```sh
    kubectl --kubeconfig kubeconfig -n rolesanywhere-test get certificate rolesanywhere-test
@@ -337,18 +417,40 @@ is still holding onto.
 
 ## Not yet done
 
-- **Real per-pod automation.** Every workload here still needs a
-  hand-written `Certificate` resource (see the worked example above) - there's
-  no controller minting one automatically from ServiceAccount identity.
+- **`Certificate` creation is automated (Kyverno), pod wiring still isn't.**
+  A `ServiceAccount` annotation now gets a `Certificate` generated
+  automatically (see "Automation and a misconfiguration guard" above) - but
+  the actual pod-level wiring (`fetch-signing-helper` initContainer, volume
+  mounts, `AWS_CONFIG_FILE`) is still hand-written per pod, same as it's
+  always been. Closing that gap means *mutating* a Pod at admission time -
+  closer to what `amazon-eks-pod-identity-webhook` does for IRSA - which
+  Kyverno could also do (a `MutatingPolicy`), not built here.
+- **Certificates live in `Secret`s, readable by anyone with ordinary
+  Secret-read RBAC - unlike this repo's other two paths.** cert-manager
+  always writes the issued key material to a `kubernetes.io/tls` `Secret`
+  object. That's fundamentally different from IRSA's projected
+  ServiceAccount token (minted by kubelet straight into the pod's own
+  ephemeral volume via the TokenRequest API, never persisted to etcd as a
+  Secret at all) or Vault's rendered files (`emptyDir`-only, same story) -
+  both of those need a live exec into the specific pod (or node/kubelet
+  compromise) to extract; a cert-manager `Secret` can be read by anyone with
+  `get`/`list` RBAC on Secrets, from anywhere, at any later time, and copied
+  into a different namespace's pod entirely - `kubectl get secret ... -o
+  yaml | kubectl apply -n other-namespace -f -`. Neither Kyverno policy
+  above touches this: the `ValidatingPolicy` only ever sees `Certificate`/
+  `CertificateRequest` objects at the moment they're created, not what
+  happens to the `Secret` cert-manager writes afterward.
   [`csi-driver-spiffe`](https://cert-manager.io/docs/usage/csi-driver-spiffe/)
-  (part of the cert-manager project) is the closest real equivalent: a CSI
-  driver that mounts a SPIFFE-identity certificate into any pod via a
-  volume claim, deriving the identity from the pod's own
-  namespace/ServiceAccount, no per-workload YAML at all. Adopting it would
-  also mean switching to the literal `spiffe://` scheme (its identities
-  *are* real SPIFFE SVIDs), plus running `trust-manager` for trust bundle
-  distribution - more infrastructure than this evaluation's single test
-  workload currently justifies.
+  (part of the cert-manager project) closes both this gap and the one above
+  at once: a CSI driver that mounts a SPIFFE-identity certificate straight
+  into a pod's own node-local filesystem via a volume claim - never a
+  Secret object - deriving the identity from the pod's own
+  namespace/ServiceAccount automatically, no per-workload YAML at all.
+  Adopting it would also mean switching to the literal `spiffe://` scheme
+  (its identities *are* real SPIFFE SVIDs), plus running `trust-manager` for
+  trust bundle distribution - more infrastructure than this evaluation's
+  single test workload currently justifies, but the strongest real answer
+  to both open items here.
 - **ACM Private CA**, as the paid alternative to the self-signed root here,
   for anyone who eventually needs a trust chain that isn't self-signed
   (e.g. because something outside this cluster also needs to trust it).
