@@ -21,18 +21,42 @@
 # ClusterPolicy was deprecated in Kyverno 1.17 (Feb 2026) with removal planned for 1.20
 # (Oct 2026).
 #
-# CAVEAT: GeneratingPolicy/ValidatingPolicy only went stable in that same 1.17 release, so
-# this is a best-effort draft cross-checked against Kyverno's current docs, not yet verified
-# against a live cluster - in particular, the exact cross-resource ConfigMap lookup
-# (resource.Get(...) below) and the generate template's interpolation syntax are the parts
-# most likely to need adjustment once actually applied. Confirm with
-# `kubectl get generatingpolicy,validatingpolicy` (both should report a ready/valid status,
-# not a CEL compile error) before trusting this file - see docs/rolesanywhere.md.
+# Confirmed live end to end (2026-08-30, rke2-lab in eu-north-1): the resource.Get(...)
+# ConfigMap lookup and the generate template's (( ... )) interpolation syntax both worked
+# exactly as drafted. Two real bugs did surface, both fixed below and explained inline where
+# fixed: a CEL map-key-lookup gotcha in the GeneratingPolicy's matchConditions, and a missing
+# RBAC grant for Kyverno's background-controller. See docs/rolesanywhere.md's Kyverno section
+# for the full writeup, including a pod/Certificate application-order gotcha this surfaced
+# that isn't a bug in this file (a Pod applied before its Certificate/Secret exists gets
+# stuck retrying a volume mount and needs a delete+recreate, not a self-heal).
 #
 # Apply once, after manifests/kyverno-config.yaml (this reads that ConfigMap):
 #
 #   kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-policies.yaml
 
+---
+# Kyverno's background-controller (which runs `generate` rules) has no built-in permission
+# to create arbitrary CRD-backed resources like cert-manager's Certificate - confirmed live,
+# the GeneratingPolicy below reported `status.ready: true` (it compiled fine) but every
+# actual generation attempt failed with `certificates.cert-manager.io is forbidden: User
+# "system:serviceaccount:kyverno:kyverno-background-controller" cannot create resource
+# "certificates"...`. Kyverno's own background-controller ClusterRole is empty by design and
+# aggregates in anything labeled rbac.kyverno.io/aggregate-to-background-controller: "true"
+# (see `kubectl get clusterrole kyverno:background-controller -o yaml` - it's an
+# aggregationRule, no ClusterRoleBinding to edit) - this is exactly that extension point,
+# not a workaround bolted on separately.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kyverno-generate-rolesanywhere-certificates
+  labels:
+    rbac.kyverno.io/aggregate-to-background-controller: "true"
+rules:
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+
+---
 apiVersion: policies.kyverno.io/v1
 kind: GeneratingPolicy
 metadata:
@@ -48,9 +72,16 @@ spec:
         operations: ['CREATE', 'UPDATE']
         resources: ['serviceaccounts']
   matchConditions:
+    # CEL's map index operator (annotations['key']) throws "no such key" rather than
+    # returning false/null when the key is absent - confirmed live: this matchCondition
+    # errored on every ServiceAccount that simply doesn't have this annotation at all
+    # (cert-manager's own SAs, kube-system's, etc.), not just skip them. has() only
+    # confirms the annotations map itself exists, not that this specific key is in it - the
+    # `in` operator is what actually guards a map-index lookup.
     - name: opted-in
       expression: >-
         has(object.metadata.annotations) &&
+        ('rke2-lab.internal/rolesanywhere-enabled' in object.metadata.annotations) &&
         object.metadata.annotations['rke2-lab.internal/rolesanywhere-enabled'] == 'true'
   variables:
     - name: saNamespace

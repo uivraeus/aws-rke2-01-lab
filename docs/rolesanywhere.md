@@ -228,12 +228,51 @@ policy on `Certificate`/`CertificateRequest` objects can close.
 `policies.kyverno.io/v1` `GeneratingPolicy`/`ValidatingPolicy` CRDs, not the
 older `ClusterPolicy` generate/validate rule style - `ClusterPolicy` was
 deprecated in Kyverno 1.17 (Feb 2026), with removal planned for 1.20 (Oct
-2026). Confirm with `kubectl get generatingpolicy,validatingpolicy` that
-both report a ready/valid status (not a CEL compile error) before trusting
-this file - see its own header comment for the parts most likely to need
-adjustment, since these CRDs only went stable a few months before this was
-written and haven't been battle-tested here as thoroughly as the rest of
-this doc.
+2026). Kyverno's own Helm install output confirms this independently, unprompted:
+*"The legacy kyverno.io policy types are deprecated and will be removed in a
+future release. Migrate to their policies.kyverno.io replacements..."*.
+
+**Confirmed live** (2026-08-30, `rke2-lab` in `eu-north-1`): the full chain
+- annotate a `ServiceAccount`, `Certificate` appears automatically with the
+correct `workload-id://` URI, the pod's `aws sts get-caller-identity` and
+scoped S3 access work exactly as they did with the hand-written `Certificate`,
+and the `ValidatingPolicy` actually rejects a namespace-mismatched
+`Certificate` while leaving one targeting an unrelated issuer untouched.
+Two real bugs surfaced getting there, both fixed in
+[`kyverno-rolesanywhere-policies.yaml`](../manifests/kyverno-rolesanywhere-policies.yaml)
+and explained inline where fixed - flagged here because both produced
+misleading signals, the same pattern as the two trust-policy bugs earlier
+in this doc:
+
+- **CEL's map index operator throws, it doesn't return false.**
+  `object.metadata.annotations['some-key']` errors with `no such key` if the
+  map doesn't have that key at all - `has(object.metadata.annotations)`
+  only confirms the *map itself* exists, not that this specific key does.
+  Every `ServiceAccount` in the cluster without the opt-in annotation
+  (`cert-manager`'s own, `kube-system`'s, ...) made the `matchConditions`
+  error rather than simply not match, spamming failed `UpdateRequest`s. Fix:
+  guard the lookup with `'key' in map` first.
+- **Kyverno's `background-controller` (which runs `generate`) has no
+  built-in permission for arbitrary CRDs.** The `GeneratingPolicy` reported
+  `status.ready: true` - it compiled fine - but every actual generation
+  attempt failed with `certificates.cert-manager.io is forbidden`. Its
+  `ClusterRole` is deliberately empty and aggregates in anything labeled
+  `rbac.kyverno.io/aggregate-to-background-controller: "true"` (see
+  `kubectl get clusterrole kyverno:background-controller -o yaml` - an
+  `aggregationRule`, no `ClusterRoleBinding` to hunt for), so the fix is a
+  small separate `ClusterRole` with that label, not a workaround bolted on
+  elsewhere.
+
+**A related, non-bug gotcha worth knowing**: a `Pod` applied *before* its
+`Certificate`/`Secret` exists gets stuck at `Init:0/1` retrying the volume
+mount (`FailedMount ... secret "..." not found`) - and does **not**
+self-heal once the `Secret` shows up afterward, at least not observed
+within several minutes. `kubectl delete pod` + reapply once
+`kubectl get certificate` shows `Ready: True` clears it immediately. Since
+`rolesanywhere-test.yaml` applies the `Namespace`/`ServiceAccount`/`Pod` in
+one `kubectl apply`, and the `Certificate` now only appears *after* Kyverno
+reacts to the `ServiceAccount`, hitting this on a fresh apply is expected,
+not a sign something's actually wrong.
 
 **What this does *not* automate**: the actual pod-level wiring - the
 `fetch-signing-helper` initContainer, the volume mounts, `AWS_CONFIG_FILE`
@@ -288,6 +327,14 @@ export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
 envsubst '${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
   < manifests/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 kubectl --kubeconfig kubeconfig -n rolesanywhere-test get certificate rolesanywhere-test   # generated automatically - see below
+
+# The Pod above was applied before Kyverno had a Certificate/Secret to satisfy its
+# rolesanywhere-tls volume mount - expected on a fresh apply (see "Automation and a
+# misconfiguration guard" above), and it won't self-heal on its own. Once the Certificate
+# shows Ready: True, clear it with:
+kubectl --kubeconfig kubeconfig -n rolesanywhere-test delete pod rolesanywhere-test
+envsubst '${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
+  < manifests/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 ```
 
 The restricted `envsubst '...'` form (an explicit list of names, not a bare
