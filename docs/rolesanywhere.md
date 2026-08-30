@@ -263,16 +263,47 @@ in this doc:
   small separate `ClusterRole` with that label, not a workaround bolted on
   elsewhere.
 
-**A related, non-bug gotcha worth knowing**: a `Pod` applied *before* its
-`Certificate`/`Secret` exists gets stuck at `Init:0/1` retrying the volume
-mount (`FailedMount ... secret "..." not found`) - and does **not**
-self-heal once the `Secret` shows up afterward, at least not observed
-within several minutes. `kubectl delete pod` + reapply once
-`kubectl get certificate` shows `Ready: True` clears it immediately. Since
-`rolesanywhere-test.yaml` applies the `Namespace`/`ServiceAccount`/`Pod` in
-one `kubectl apply`, and the `Certificate` now only appears *after* Kyverno
-reacts to the `ServiceAccount`, hitting this on a fresh apply is expected,
-not a sign something's actually wrong.
+**Cleanup on `ServiceAccount` deletion, confirmed live in a follow-up pass**:
+deleting the annotated `ServiceAccount` needed two separate fixes to fully
+clean up after itself, not one:
+
+- The generated `Certificate` sets `metadata.ownerReferences` pointing at
+  the triggering `ServiceAccount` (`uid`/`name`/`kind`), so ordinary
+  Kubernetes garbage collection deletes it when the `ServiceAccount` is
+  deleted - confirmed live, works because both are always in the same
+  namespace (owner references require that).
+- That alone left the `Secret` cert-manager wrote for the `Certificate`
+  dangling - confirmed live: `ownerReferences` cascades `ServiceAccount` ->
+  `Certificate`, but cert-manager doesn't link `Secret` -> `Certificate` by
+  default (`enableCertificateOwnerRef: false` is the chart default,
+  deliberately - deleting a `Certificate` by itself does *not* delete its
+  Secret unless this is turned on). Fixed by setting
+  `enableCertificateOwnerRef=true` on the `make cert-manager` Helm install
+  (see the `Makefile`'s comment on that target for why this is safe to set
+  cluster-wide, including for `pod-identity-webhook`'s own unrelated
+  Certificate).
+
+With both in place, deleting a `ServiceAccount` now leaves nothing behind -
+confirmed by deleting one and finding neither its `Certificate` nor its
+`Secret` still present a few seconds later.
+
+**A related, non-bug gotcha, corrected after a second, more patient live
+test**: a `Pod` applied *before* its `Certificate`/`Secret` exists sits at
+`Init:0/1` retrying the volume mount (`FailedMount ... secret "..." not
+found`). An earlier version of this doc claimed this needed a manual
+`kubectl delete pod` to clear, based on giving up after only about a minute
+of watching - **that claim was wrong**. Confirmed live with a deliberately
+delayed `Secret` (and no pod deletion at all): kubelet's own volume-mount
+retry loop backs off between repeated failures on the same pod, so the gap
+between attempts grows the longer it's been stuck (observed successive
+`FailedMount` events roughly 5 minutes apart late in the backoff, versus
+seconds apart early on) - but it does keep retrying, and the pod reached
+`Running` on its own within a couple of minutes of the `Secret` actually
+existing, no intervention needed. In practice this window rarely opens at
+all: with the `GeneratingPolicy`'s RBAC correctly in place (as shipped),
+the `Certificate` typically appears within a second or two of the
+`ServiceAccount`, well before a freshly-scheduled pod even attempts its
+first mount.
 
 **What this does *not* automate**: the actual pod-level wiring - the
 `fetch-signing-helper` initContainer, the volume mounts, `AWS_CONFIG_FILE`
@@ -327,15 +358,14 @@ export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
 envsubst '${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
   < manifests/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 kubectl --kubeconfig kubeconfig -n rolesanywhere-test get certificate rolesanywhere-test   # generated automatically - see below
-
-# The Pod above was applied before Kyverno had a Certificate/Secret to satisfy its
-# rolesanywhere-tls volume mount - expected on a fresh apply (see "Automation and a
-# misconfiguration guard" above), and it won't self-heal on its own. Once the Certificate
-# shows Ready: True, clear it with:
-kubectl --kubeconfig kubeconfig -n rolesanywhere-test delete pod rolesanywhere-test
-envsubst '${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
-  < manifests/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 ```
+
+With the `GeneratingPolicy`'s RBAC correctly in place, the `Certificate`
+above typically appears within a second or two of the `ServiceAccount`, so
+the `Pod` should reach `Running` on its own without any extra steps. If it
+briefly shows `Init:0/1` first, that's fine - see "Automation and a
+misconfiguration guard" above for why, and why it resolves on its own
+without needing a manual pod restart.
 
 The restricted `envsubst '...'` form (an explicit list of names, not a bare
 `envsubst`) matters here for the same reason it does in
