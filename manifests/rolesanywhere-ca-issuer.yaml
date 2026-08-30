@@ -1,0 +1,44 @@
+# One-time, cluster-wide prerequisite for the Roles Anywhere path (see docs/rolesanywhere.md).
+#
+# Loads the same self-signed root CA Terraform registered with AWS as the Roles Anywhere
+# trust anchor (terraform/rolesanywhere.tf) into cert-manager, so it can sign leaf
+# certificates AWS will actually trust. This is independent of installing cert-manager
+# itself - `make cert-manager` only installs the controller/CRDs and knows nothing about
+# this CA; apply this manifest as a separate step afterward.
+#
+# The Secret must live in the cert-manager namespace - a ClusterIssuer only ever looks for
+# its secretRef there (cert-manager's "cluster resource namespace"), regardless of which
+# namespace a Certificate referencing this ClusterIssuer lives in.
+#
+# The cert/key are base64-encoded before substitution (`data:`, not `stringData:`) rather
+# than embedded as multi-line PEM text - envsubst has no notion of YAML block-scalar
+# indentation, so splicing a raw multi-line PEM into a `|` block would silently produce
+# invalid YAML the moment the substituted content's line breaks don't line up with the
+# block's indent level. A single base64 line has no such risk.
+#
+# Apply once, after `make cert-manager` and after terraform apply with
+# enable_rolesanywhere = true:
+#
+#   export ROLESANYWHERE_CA_CERT_B64=$(terraform -chdir=terraform output -raw rolesanywhere_ca_cert_pem | base64 -w0)
+#   export ROLESANYWHERE_CA_KEY_B64=$(terraform -chdir=terraform output -raw rolesanywhere_ca_key_pem | base64 -w0)
+#   envsubst '${ROLESANYWHERE_CA_CERT_B64} ${ROLESANYWHERE_CA_KEY_B64}' \
+#     < manifests/rolesanywhere-ca-issuer.yaml | kubectl --kubeconfig kubeconfig apply -f -
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rolesanywhere-ca
+  namespace: cert-manager
+type: kubernetes.io/tls
+data:
+  tls.crt: ${ROLESANYWHERE_CA_CERT_B64}
+  tls.key: ${ROLESANYWHERE_CA_KEY_B64}
+
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: rolesanywhere-ca
+spec:
+  ca:
+    secretName: rolesanywhere-ca

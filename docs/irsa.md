@@ -104,6 +104,9 @@ own (not in its own repo, not in [`aws/eks-charts`](https://github.com/aws/eks-c
 either):
 
 ```sh
+make tunnel-k8s              # in its own shell, leave it running - both targets below use
+                              # `--kubeconfig kubeconfig`, which means localhost:6443
+                              # tunneled to the control node, not the internet
 make cert-manager           # hard prerequisite - see below
 make pod-identity-webhook
 ```
