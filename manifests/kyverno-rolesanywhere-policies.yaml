@@ -88,6 +88,8 @@ spec:
       expression: 'object.metadata.namespace'
     - name: saName
       expression: 'object.metadata.name'
+    - name: saUid
+      expression: 'object.metadata.uid'
     - name: clusterName
       expression: 'resource.Get("v1", "configmaps", "kyverno", "cluster-config").data.clusterName'
     - name: workloadUri
@@ -102,6 +104,16 @@ spec:
           metadata:
             name: (( variables.saName ))
             namespace: (( variables.saNamespace ))
+            # Deleting the ServiceAccount cascades to delete this Certificate (and the
+            # Secret cert-manager wrote for it) via ordinary Kubernetes garbage collection -
+            # not yet confirmed live as of the first pass of this file (see
+            # docs/rolesanywhere.md's Kyverno section).
+            ownerReferences:
+              - apiVersion: v1
+                kind: ServiceAccount
+                name: (( variables.saName ))
+                uid: (( variables.saUid ))
+                controller: true
           spec:
             secretName: (( variables.saName ))-tls
             duration: 1h
