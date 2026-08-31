@@ -589,6 +589,54 @@ is still holding onto.
   `Certificate` says nothing about whether the `MutatingPolicy` also
   injected correctly. Re-verify both independently after any Kyverno
   upgrade, not just the credential chain end to end.
+- **The `MutatingPolicy`'s "invariant to existing containers/volumes" claim
+  is reasoned from the mechanism, not fully live-tested.** Every mutation
+  (`initContainers`/`volumes` via list concatenation, `volumeMounts`/`env`
+  via one `indexOf()`-addressed `JSONPatch` per container) is count-invariant
+  by construction - nothing hardcodes "exactly one container" or "no
+  pre-existing volumes" - and Kubernetes itself would reject a genuine
+  container/volume *name* collision loudly rather than silently corrupting
+  anything. What's actually been run live is N=1 in every dimension (one
+  container, zero pre-existing init containers/volumes). One confirmed,
+  different-in-kind exception: `AWS_CONFIG_FILE`/`AWS_REGION` are env var
+  *names*, not object names, and Kubernetes does not enforce uniqueness on
+  those - an app already setting either would not be rejected, it would
+  silently end up with two entries of that name, with the injected one
+  (appended last) winning at runtime. Worth an actual multi-container,
+  pre-existing-volume live test before trusting the invariance claim fully.
+- **`fetch-signing-helper` downloads `aws_signing_helper` from
+  `rolesanywhere.amazonaws.com` at every single pod start** - fine for a
+  lab, a real weak point anywhere with restricted egress or supply-chain
+  concerns: every pod creation reaches out over the network and trusts that
+  URL to keep serving the exact same binary. No official container image
+  ships it (confirmed absent when this was first built), but building one
+  is trivial - a tiny image that `curl`s the binary once at build time
+  instead of at every pod start, built via CI into your own registry,
+  pinned by digest. Swap that in for `curlimages/curl:8.11.1`, drop the
+  `curl` step from the init script, everything else about the current
+  design stays the same.
+  - **A more structural option the same image unlocks**: run
+    `aws_signing_helper serve` (a long-running local IMDSv2-compatible
+    endpoint on `127.0.0.1:9911`, the same discovery mechanism real EC2
+    instance-profile credentials use) as a sidecar instead of an
+    initContainer. That would remove the `signing-helper`/`aws-config`
+    shared volumes and the `credential_process` config file entirely - the
+    app container would need at most one env var
+    (`AWS_EC2_METADATA_SERVICE_ENDPOINT`), possibly none if its SDK already
+    checks IMDS by default. Deliberately **not** the same tradeoff this
+    repo's own Vault Agent Injector already documents, though it looks
+    similar on the surface: the Injector sidecar exists because Vault's
+    static/one-shot path genuinely *can't* rotate credentials at all -
+    that's its whole reason to exist. Rotation already works here with the
+    current one-shot `initContainer` design (`credential_process`
+    re-invokes the whole helper binary fresh on every SDK credential
+    refresh, re-reading whatever cert cert-manager most recently rotated
+    onto disk - confirmed live in "Proving rotation" above). A `serve`
+    sidecar here would trade one continuously-running extra container per
+    pod for removing the shared-volume/config-file plumbing and a cheaper
+    per-refresh cost (a local HTTP GET vs. exec-ing the whole helper binary
+    as a subprocess each time) - a real option, not a clear upgrade the way
+    Vault's sidecar was.
 - **Certificates live in `Secret`s, readable by anyone with ordinary
   Secret-read RBAC - unlike this repo's other two paths.** cert-manager
   always writes the issued key material to a `kubernetes.io/tls` `Secret`
