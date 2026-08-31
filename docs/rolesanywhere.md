@@ -139,29 +139,30 @@ generalizes the same way IRSA's `sub`-claim scoping does: say a `billing`
 namespace needs its own `reports` ServiceAccount to get its own, differently
 -scoped role.
 
-1. No change to the CA, trust anchor, or `ClusterIssuer` - all three are
-   already shared across every namespace.
-2. Add the `reports` `ServiceAccount` in the `billing` namespace with
-   `rke2-lab.internal/rolesanywhere-enabled: "true"` annotated on it - see
-   "Automation and a misconfiguration guard (Kyverno)" below. No `Certificate`
-   to hand-write: the `GeneratingPolicy` derives
-   `workload-id://<cluster_name>.internal/ns/billing/sa/reports` from the
-   ServiceAccount's own namespace/name and creates one automatically.
-3. Add a new `aws_iam_role` + trust policy in Terraform, identical in shape
+1. No change to the CA, trust anchor, `ClusterIssuer`, or any of the
+   Kyverno policies - all are already shared across every namespace.
+2. Add a new `aws_iam_role` + trust policy in Terraform, identical in shape
    to `rolesanywhere_test`'s but with
    `aws:PrincipalTag/x509SAN/URI` = `workload-id://<cluster_name>.internal/ns/billing/sa/reports`,
-   and whatever permissions that role actually needs.
-4. Add that role's ARN to the Roles Anywhere profile's `role_arns` (or give
-   it its own profile, if session policies/durations should differ) - a
-   pod authenticates as *a certificate*, and which of the profile's roles it
-   actually assumes is chosen at credential-helper invocation time via
-   `--role-arn`, same as `rolesanywhere-test.yaml`'s initContainer does.
+   and whatever permissions that role actually needs. Add that role's ARN
+   to the Roles Anywhere profile's `role_arns` (or give it its own profile,
+   if session policies/durations should differ).
+3. Add the `reports` `ServiceAccount` in the `billing` namespace with two
+   annotations - `rke2-lab.internal/rolesanywhere-enabled: "true"` and
+   `rke2-lab.internal/rolesanywhere-role-arn: <the new role's ARN>` - and
+   nothing else. No `Certificate` to hand-write (the `GeneratingPolicy`
+   derives `workload-id://<cluster_name>.internal/ns/billing/sa/reports`
+   from the `ServiceAccount`'s own namespace/name), and no `Pod`-level
+   wiring to hand-write either (the `MutatingPolicy` injects it, reading
+   the role ARN straight off this same annotation - see "Pod-level wiring"
+   below).
 
 Nothing about the CA/cert-manager/Kyverno wiring changes as workloads are
-added - only a new annotated `ServiceAccount` and a new `aws_iam_role`, one
-pair per workload identity. The `Certificate` itself is generated, not
-authored, so step 2 above can no longer drift from step 3 the way a
-hand-typed URI in two separate files could.
+added - only a new `aws_iam_role` and a `ServiceAccount` carrying two
+annotations, one pair per workload identity. Both the `Certificate` and the
+pod wiring are generated, not authored, so nothing here can drift the way a
+hand-typed URI (or a hand-typed `--role-arn`) in multiple separate files
+once could.
 
 **One more gotcha the URI-SAN-only design above runs into**: Roles Anywhere
 does not accept certificates with an empty Subject, even though
@@ -305,13 +306,47 @@ the `Certificate` typically appears within a second or two of the
 `ServiceAccount`, well before a freshly-scheduled pod even attempts its
 first mount.
 
-**What this does *not* automate**: the actual pod-level wiring - the
-`fetch-signing-helper` initContainer, the volume mounts, `AWS_CONFIG_FILE`
-- stays exactly as hand-written as it is in `rolesanywhere-test.yaml`'s
-`Pod` spec. Automating that would mean *mutating* a Pod at admission time
-(closer to what `amazon-eks-pod-identity-webhook` does for IRSA - Kyverno
-has a `MutatingPolicy` CRD that could do this too) - a distinct, larger
-piece of work, not built here.
+### Pod-level wiring (Kyverno `MutatingPolicy`)
+
+The `GeneratingPolicy`/`ValidatingPolicy` above only ever reach the
+`Certificate` - the actual pod-level wiring (the `fetch-signing-helper`
+initContainer, the `signing-helper`/`aws-config` `emptyDir` volumes, the
+`rolesanywhere-tls` `Secret` mount, `AWS_CONFIG_FILE`/`AWS_REGION`) still
+had to be hand-written in every `Pod` spec, exactly like
+`rolesanywhere-test.yaml`'s. [`manifests/kyverno-rolesanywhere-mutation.yaml`](../manifests/kyverno-rolesanywhere-mutation.yaml)
+closes that gap with a `MutatingPolicy` - the same role
+`amazon-eks-pod-identity-webhook` already plays for IRSA in this repo
+(`docs/irsa.md`), but expressed as a Kyverno CEL policy instead of a
+bespoke Go webhook. [`manifests/rolesanywhere-mutation-test.yaml`](../manifests/rolesanywhere-mutation-test.yaml)
+is the fully-automated counterpart to `rolesanywhere-test.yaml`, the same
+relationship `irsa-webhook-test.yaml` already has to `irsa-test.yaml` -
+mutually exclusive, identically-named objects, just two `ServiceAccount`
+annotations and a bare `Pod`.
+
+**A second annotation, deliberately not IRSA's `rke2-lab.internal/role-arn`**:
+the `MutatingPolicy` fires on
+`rke2-lab.internal/rolesanywhere-role-arn: <arn>` (alongside the existing
+`rolesanywhere-enabled: "true"`), not IRSA's own `role-arn` key. Reusing
+that exact key would be a real collision, not just an inconsistency: both
+`irsa-test`/`rolesanywhere-test` paths are commonly installed on the same
+cluster side by side (true throughout this whole evaluation), so a
+`ServiceAccount` set up purely to test IRSA could accidentally *also*
+trigger Roles Anywhere pod mutation if it carried the identical annotation
+key. Cluster-wide values (trust anchor ARN, profile ARN, region) come from
+the same `cluster-config` `ConfigMap` the `GeneratingPolicy` already reads,
+extended with three more keys - the role ARN is the only genuinely
+per-workload value, so it's the only one that travels via annotation rather
+than the shared `ConfigMap`.
+
+**Confidence caveat, not yet resolved as of writing**: this is the
+least-precedented CEL shape used across all three Roles Anywhere Kyverno
+policies - iterating and patching an *existing* list field
+(`spec.containers`) while preserving whatever an app's own `Pod` spec
+already set, rather than building one brand-new object from scratch the
+way the `GeneratingPolicy` does. Not yet live-verified at the time this
+section was written - see
+[`kyverno-rolesanywhere-mutation.yaml`](../manifests/kyverno-rolesanywhere-mutation.yaml)'s
+own header comment for what to check before trusting it.
 
 ## Bootstrap sequence
 
@@ -346,17 +381,27 @@ envsubst '${ROLESANYWHERE_CA_CERT_B64} ${ROLESANYWHERE_CA_KEY_B64}' \
   < manifests/rolesanywhere-ca-issuer.yaml | kubectl --kubeconfig kubeconfig apply -f -
 
 export CLUSTER_NAME=$(terraform -chdir=terraform output -raw cluster_name)
-envsubst '${CLUSTER_NAME}' < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
-kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-policies.yaml
-kubectl --kubeconfig kubeconfig get generatingpolicy,validatingpolicy   # both should show a ready/valid status
-
 export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_trust_anchor_arn)
 export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
+export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${AWS_REGION}' \
+  < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-policies.yaml
+kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-mutation.yaml
+kubectl --kubeconfig kubeconfig get generatingpolicy,validatingpolicy,mutatingpolicy   # all three should show a ready/valid status
+
 export ROLESANYWHERE_ROLE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_role_arn)
 export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw rolesanywhere_test_bucket_name)
-export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+
+# Either the hand-wired Pod (all wiring explicit, useful as a reference for what the
+# MutatingPolicy is actually doing on your behalf):
 envsubst '${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
   < manifests/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+
+# ...or the fully-automated one (mutually exclusive with the above - delete
+# `kubectl delete namespace rolesanywhere-test` first if switching):
+envsubst '${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME}' \
+  < manifests/rolesanywhere-mutation-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 kubectl --kubeconfig kubeconfig -n rolesanywhere-test get certificate rolesanywhere-test   # generated automatically - see below
 ```
 
@@ -494,14 +539,16 @@ is still holding onto.
 
 ## Not yet done
 
-- **`Certificate` creation is automated (Kyverno), pod wiring still isn't.**
-  A `ServiceAccount` annotation now gets a `Certificate` generated
-  automatically (see "Automation and a misconfiguration guard" above) - but
-  the actual pod-level wiring (`fetch-signing-helper` initContainer, volume
-  mounts, `AWS_CONFIG_FILE`) is still hand-written per pod, same as it's
-  always been. Closing that gap means *mutating* a Pod at admission time -
-  closer to what `amazon-eks-pod-identity-webhook` does for IRSA - which
-  Kyverno could also do (a `MutatingPolicy`), not built here.
+- **Pod-level mutation still needs a fully independent live-verification
+  pass, on top of the `Certificate` chain's own.** `Certificate` creation
+  (`GeneratingPolicy`) and now pod wiring (`MutatingPolicy`, see "Pod-level
+  wiring" above) are both automated, but they're separate policies with
+  separate failure modes - a correctly-issued `Certificate` says nothing
+  about whether the `MutatingPolicy`'s CEL actually preserved an app's
+  existing container fields (image, command, ...) correctly while appending
+  to them, which is the least-precedented CEL shape used here. Re-verify
+  this specific claim after any Kyverno upgrade, not just the credential
+  chain end to end.
 - **Certificates live in `Secret`s, readable by anyone with ordinary
   Secret-read RBAC - unlike this repo's other two paths.** cert-manager
   always writes the issued key material to a `kubernetes.io/tls` `Secret`
