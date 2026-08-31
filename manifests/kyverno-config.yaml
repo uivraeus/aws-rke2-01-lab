@@ -1,0 +1,20 @@
+# Small config lookup for manifests/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy -
+# it needs the cluster name to build the same workload-id://<cluster_name>.internal/...  URI
+# terraform/rolesanywhere.tf's local.rolesanywhere_test_workload_uri computes, but a
+# GeneratingPolicy's CEL has no way to read a Terraform output directly, so it's handed
+# across the same way this repo already bridges Terraform values into other systems (see
+# local_file.ansible_terraform_vars in terraform/main.tf) - a small ConfigMap, applied here
+# via envsubst from the same `terraform output` used everywhere else in these docs.
+#
+# Apply once, before manifests/kyverno-rolesanywhere-policies.yaml (which reads it):
+#
+#   export CLUSTER_NAME=$(terraform -chdir=terraform output -raw cluster_name)
+#   envsubst '${CLUSTER_NAME}' < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-config
+  namespace: kyverno
+data:
+  clusterName: ${CLUSTER_NAME}

@@ -28,7 +28,8 @@ ANSIBLE_ENV = AWS_PROFILE=$$(terraform -chdir=../$(TF_DIR) output -raw aws_profi
 	restart reboot sync-oidc rotate-sa-key \
 	tunnel-k8s tunnel-vault \
 	create-operator-vault unseal-vault \
-	injector-vault cert-manager pod-identity-webhook
+	injector-vault cert-manager pod-identity-webhook \
+	kyverno
 
 # Creates .ansible-venv if missing and makes sure ansible/boto3/botocore are installed
 # in it. Safe/fast to depend on from every ansible-invoking target: python3 -m venv is
@@ -160,13 +161,36 @@ injector-vault:
 # cert-manager is a hard prerequisite for amazon-eks-pod-identity-webhook
 # (https://github.com/aws/amazon-eks-pod-identity-webhook - see
 # manifests/pod-identity-webhook.yaml) - its own MutatingWebhookConfiguration's
-# caBundle gets populated by cert-manager's CA injector, not by us.
+# caBundle gets populated by cert-manager's CA injector, not by us. It's also the CA
+# cert-manager for the Roles Anywhere path (see docs/rolesanywhere.md).
+#
+# enableCertificateOwnerRef=true (default false - confirmed live) is cluster-wide, so it
+# also applies to pod-identity-webhook's own self-signed TLS Certificate: deleting a
+# Certificate now cascades to delete the Secret cert-manager wrote for it, rather than
+# leaving it orphaned. Needed for the Roles Anywhere Kyverno GeneratingPolicy's own
+# ownerReferences fix (ServiceAccount -> Certificate) to actually clean up the Secret too,
+# not just the Certificate - without this flag the Secret is left dangling even after its
+# owning Certificate is gone, since cert-manager doesn't link Secret -> Certificate by
+# default.
 cert-manager:
 	helm repo add jetstack https://charts.jetstack.io >/dev/null 2>&1 || true
 	helm repo update jetstack
 	helm upgrade --install cert-manager jetstack/cert-manager \
 		--namespace cert-manager --create-namespace \
 		--set crds.enabled=true \
+		--set enableCertificateOwnerRef=true \
+		--kubeconfig kubeconfig
+
+# Kyverno - see docs/rolesanywhere.md's Kyverno section for what it's used for here
+# (automating Certificate creation and guarding against accidental namespace/SAN
+# mismatches). Independent of cert-manager/pod-identity-webhook - no ordering
+# requirement with those targets.
+kyverno:
+	helm repo add kyverno https://kyverno.github.io/kyverno/ >/dev/null 2>&1 || true
+	helm repo update kyverno
+	helm upgrade --install kyverno kyverno/kyverno \
+		--version 3.9.0 \
+		--namespace kyverno --create-namespace \
 		--kubeconfig kubeconfig
 
 # Installs amazon-eks-pod-identity-webhook from manifests/pod-identity-webhook.yaml -
