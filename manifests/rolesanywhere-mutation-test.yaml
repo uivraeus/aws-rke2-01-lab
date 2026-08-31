@@ -1,0 +1,63 @@
+# Automated Roles Anywhere verification via the Kyverno MutatingPolicy - no hand-wired
+# initContainer/volumes/env at all. Contrast with manifests/rolesanywhere-test.yaml (the
+# hand-wired Pod, which sets all of that directly in its own spec since no mutating policy
+# was involved there). Here there's none of that - just two ServiceAccount annotations. The
+# MutatingPolicy (installed via manifests/kyverno-rolesanywhere-mutation.yaml) sees them at
+# pod admission time and injects everything else itself, the same relationship
+# irsa-webhook-test.yaml already has to irsa-test.yaml.
+#
+# Self-contained and mutually exclusive with manifests/rolesanywhere-test.yaml - both create
+# identically-named Namespace/ServiceAccount/Pod objects (required to match the IAM role's
+# trust policy condition - see rolesanywhere.tf), demonstrating the same end-to-end Roles
+# Anywhere chain two different ways. Apply only one of the two at a time; switching means
+# deleting this one first (`kubectl delete namespace rolesanywhere-test`), not applying both
+# together.
+#
+# Fill in the placeholder below from Terraform, then apply (open `make tunnel-k8s` in
+# another shell first) - kyverno-config.yaml, kyverno-rolesanywhere-policies.yaml, and
+# kyverno-rolesanywhere-mutation.yaml must already be applied:
+#
+#   export ROLESANYWHERE_ROLE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_role_arn)
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw rolesanywhere_test_bucket_name)
+#   envsubst '${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME}' \
+#     < manifests/rolesanywhere-mutation-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#
+# rolesanywhere-test namespace/serviceaccount names below must match
+# var.rolesanywhere_namespace/var.rolesanywhere_service_account_name (defaults:
+# "rolesanywhere-test"/"rolesanywhere-test") - same reason rolesanywhere-test.yaml's do.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rolesanywhere-test
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rolesanywhere-test
+  namespace: rolesanywhere-test
+  annotations:
+    # Triggers kyverno-rolesanywhere-policies.yaml's GeneratingPolicy - same as
+    # rolesanywhere-test.yaml's ServiceAccount.
+    rke2-lab.internal/rolesanywhere-enabled: "true"
+    # Triggers kyverno-rolesanywhere-mutation.yaml's MutatingPolicy - deliberately not the
+    # same rke2-lab.internal/role-arn key IRSA's webhook uses (see that file's header
+    # comment for why reusing it would be a real collision risk, not just a style choice).
+    rke2-lab.internal/rolesanywhere-role-arn: ${ROLESANYWHERE_ROLE_ARN}
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rolesanywhere-test
+  namespace: rolesanywhere-test
+spec:
+  serviceAccountName: rolesanywhere-test
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}

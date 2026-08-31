@@ -1,0 +1,168 @@
+# Automates the Roles Anywhere pod-level wiring (fetch-signing-helper initContainer, the
+# signing-helper/aws-config emptyDir volumes, the rolesanywhere-tls Secret mount, the
+# AWS_CONFIG_FILE/AWS_REGION env vars) that manifests/rolesanywhere-test.yaml's Pod still
+# hand-writes - same role amazon-eks-pod-identity-webhook plays for IRSA
+# (manifests/pod-identity-webhook.yaml, docs/irsa.md), but as a Kyverno MutatingPolicy
+# instead of a bespoke Go webhook. See docs/rolesanywhere.md's Kyverno section for the full
+# write-up, including why this needs its own ServiceAccount annotation
+# (rke2-lab.internal/rolesanywhere-role-arn) distinct from IRSA's rke2-lab.internal/role-arn
+# - reusing that exact key would let a ServiceAccount set up to test IRSA accidentally also
+# trigger this policy, since both paths are commonly installed on the same cluster side by
+# side in this repo.
+#
+# Confirmed live (2026-08-31): a fully-automated Pod (rolesanywhere-mutation-test.yaml)
+# reached Running with every field correctly injected, and the app's own container fields
+# (command, its own env vars) survived untouched - see docs/rolesanywhere.md's Kyverno
+# section for the three real CEL/Kubernetes-API discoveries it took to get there (each
+# explained inline below, at the fix), and for why the mutations are JSONPatch throughout,
+# not ApplyConfiguration.
+#
+# Apply once, after manifests/kyverno-config.yaml (this reads that ConfigMap) and
+# manifests/kyverno-rolesanywhere-policies.yaml (the Certificate this mounts comes from
+# that policy's GeneratingPolicy):
+#
+#   kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-mutation.yaml
+
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
+metadata:
+  name: rolesanywhere-mutate-pod
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: ['CREATE']
+        resources: ['pods']
+  variables:
+    - name: saName
+      expression: 'object.spec.?serviceAccountName.orValue("default")'
+    - name: serviceAccount
+      expression: 'resource.Get("v1", "serviceaccounts", object.metadata.namespace, variables.saName)'
+    - name: saAnnotations
+      expression: 'variables.serviceAccount.metadata.?annotations.orValue({})'
+    # Same map-index gotcha as the GeneratingPolicy's matchConditions (see
+    # kyverno-rolesanywhere-policies.yaml's comment on it) - guard with `in` before
+    # indexing, don't rely on a bare has()/orValue() alone to make a missing key safe.
+    - name: shouldMutate
+      expression: >-
+        ('rke2-lab.internal/rolesanywhere-enabled' in variables.saAnnotations) &&
+        variables.saAnnotations['rke2-lab.internal/rolesanywhere-enabled'] == 'true' &&
+        ('rke2-lab.internal/rolesanywhere-role-arn' in variables.saAnnotations)
+    - name: roleArn
+      expression: >-
+        ('rke2-lab.internal/rolesanywhere-role-arn' in variables.saAnnotations) ?
+        variables.saAnnotations['rke2-lab.internal/rolesanywhere-role-arn'] : ''
+    - name: clusterConfig
+      expression: 'resource.Get("v1", "configmaps", "kyverno", "cluster-config").data'
+    - name: trustAnchorArn
+      expression: 'variables.clusterConfig.rolesanywhereTrustAnchorArn'
+    - name: profileArn
+      expression: 'variables.clusterConfig.rolesanywhereProfileArn'
+    - name: awsRegion
+      expression: 'variables.clusterConfig.awsRegion'
+    - name: secretName
+      expression: 'variables.saName + "-tls"'
+    - name: initScript
+      expression: >-
+        "set -eu\n" +
+        "curl -fsSL https://rolesanywhere.amazonaws.com/releases/1.8.5/X86_64/Linux/Amzn2023/aws_signing_helper -o /opt/bin/aws_signing_helper\n" +
+        "chmod +x /opt/bin/aws_signing_helper\n" +
+        "mkdir -p /opt/aws\n" +
+        "cat > /opt/aws/config <<EOF\n" +
+        "[default]\n" +
+        "credential_process = /opt/bin/aws_signing_helper credential-process --certificate /rolesanywhere/tls.crt --private-key /rolesanywhere/tls.key --trust-anchor-arn " + variables.trustAnchorArn + " --profile-arn " + variables.profileArn + " --role-arn " + variables.roleArn + " --region " + variables.awsRegion + "\n" +
+        "region = " + variables.awsRegion + "\n" +
+        "EOF\n"
+  mutations:
+    # JSONPatch, not ApplyConfiguration - confirmed live: ApplyConfiguration cannot touch
+    # "atomic" fields at all (a Kubernetes API-level restriction, not a Kyverno bug) - a
+    # container's `command` ([]string) is one, and the first version of this file tried to
+    # set it via ApplyConfiguration while constructing a brand-new initContainer, which the
+    # API server rejected outright: "may not mutate atomic arrays, maps or structs:
+    # .spec.initContainers[0].command". JSONPatch's `value` is plain JSON, with none of
+    # ApplyConfiguration's atomicity restrictions.
+    #
+    # One consequence worth flagging: JSONPatch has no notion of ApplyConfiguration's
+    # merge-by-name-key semantics either - `op: add` at a whole list path is a literal
+    # replacement of that value, nothing more. For the containers mutation, that means
+    # reconstructing each container from scratch would silently drop every field not
+    # explicitly restated (image, command, ports, resources, ...) - not just a theoretical
+    # risk, confirmed by what ApplyConfiguration's error above already proved about how
+    # little of "the rest of the object" survives a naive reconstruction. A first attempt
+    # tried CEL's `+` to merge a container's existing fields with the new ones
+    # (`c + dyn({"volumeMounts": ..., "env": ...})`) - that passed type-checking (`dyn`
+    # defers everything to runtime) but failed at actual mutation time with `no such
+    # overload: _+_`: CEL has no map-merge operator at all, `+` is only ever defined for
+    # numbers/strings/bytes/lists, never two maps, regardless of dyn-typing either side.
+    # Fixed properly instead: don't touch the container objects at all - use
+    # `object.spec.containers.indexOf(c)` to build one JSONPatch per container per field
+    # (`/spec/containers/<index>/volumeMounts`, `/spec/containers/<index>/env`), each `add`
+    # replacing only that one list field with `<existing entries> + <new ones>` (list
+    # concatenation, which *does* work). Every other field on every container - image,
+    # command, ports, resources, whatever an app already set - is never referenced by any
+    # patch path, so it's structurally impossible for this to drop it, unlike the merge
+    # approach which depended on CEL behavior that turned out not to exist.
+    #
+    # A second, systemic CEL issue, also confirmed live: CEL map/list literals are
+    # statically homogeneous (all *values* one type), unlike JSON - `{"name": "x",
+    # "readOnly": true}` doesn't type-check on its own (string + bool value), and wrapping
+    # the *whole* literal in dyn(...) does not fix it - CEL infers the literal's type
+    # bottom-up from its own contents before the outer dyn() ever applies, so a
+    # heterogeneous literal is already rejected before that point. What actually works:
+    # dyn(...) around every individual *value* inside a heterogeneous map/list, so each
+    # field is independently dyn-typed and the surrounding map/list unifies as
+    # map(string, dyn) / list(dyn) instead of trying to find one concrete type for
+    # everything. Far more pervasive than expected - almost every value literal below needed
+    # one before `kubectl apply` stopped rejecting this policy outright at admission time (a
+    # real practical benefit of it doing that: every fix below was caught before ever
+    # reaching a live Pod, each iteration just a `kubectl apply` away).
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          !variables.shouldMutate ? [] :
+          [
+            JSONPatch{
+              op: "add",
+              path: "/spec/initContainers",
+              value: [
+                {
+                  "name": dyn("fetch-signing-helper"),
+                  "image": dyn("curlimages/curl:8.11.1"),
+                  "command": dyn(["sh", "-c", variables.initScript]),
+                  "volumeMounts": dyn([
+                    {"name": dyn("signing-helper"), "mountPath": dyn("/opt/bin")},
+                    {"name": dyn("aws-config"), "mountPath": dyn("/opt/aws")}
+                  ])
+                }
+              ] + object.spec.?initContainers.orValue([])
+            },
+            JSONPatch{
+              op: "add",
+              path: "/spec/volumes",
+              value: object.spec.?volumes.orValue([]) + [
+                {"name": dyn("signing-helper"), "emptyDir": dyn({})},
+                {"name": dyn("aws-config"), "emptyDir": dyn({})},
+                {"name": dyn("rolesanywhere-tls"), "secret": dyn({"secretName": variables.secretName})}
+              ]
+            }
+          ] + object.spec.containers.map(c,
+            JSONPatch{
+              op: "add",
+              path: "/spec/containers/" + string(object.spec.containers.indexOf(c)) + "/volumeMounts",
+              value: dyn(c.?volumeMounts.orValue([])) + [
+                {"name": dyn("signing-helper"), "mountPath": dyn("/opt/bin"), "readOnly": dyn(true)},
+                {"name": dyn("aws-config"), "mountPath": dyn("/opt/aws"), "readOnly": dyn(true)},
+                {"name": dyn("rolesanywhere-tls"), "mountPath": dyn("/rolesanywhere"), "readOnly": dyn(true)}
+              ]
+            }
+          ) + object.spec.containers.map(c,
+            JSONPatch{
+              op: "add",
+              path: "/spec/containers/" + string(object.spec.containers.indexOf(c)) + "/env",
+              value: dyn(c.?env.orValue([])) + [
+                {"name": dyn("AWS_CONFIG_FILE"), "value": dyn("/opt/aws/config")},
+                {"name": dyn("AWS_REGION"), "value": dyn(variables.awsRegion)}
+              ]
+            }
+          )
