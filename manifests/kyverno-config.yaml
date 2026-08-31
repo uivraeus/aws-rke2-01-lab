@@ -1,15 +1,26 @@
-# Small config lookup for manifests/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy -
-# it needs the cluster name to build the same workload-id://<cluster_name>.internal/...  URI
-# terraform/rolesanywhere.tf's local.rolesanywhere_test_workload_uri computes, but a
-# GeneratingPolicy's CEL has no way to read a Terraform output directly, so it's handed
-# across the same way this repo already bridges Terraform values into other systems (see
-# local_file.ansible_terraform_vars in terraform/main.tf) - a small ConfigMap, applied here
-# via envsubst from the same `terraform output` used everywhere else in these docs.
+# Small config lookup for the Roles Anywhere Kyverno policies (manifests/kyverno-rolesanywhere-*.yaml).
+# clusterName builds the same workload-id://<cluster_name>.internal/...  URI
+# terraform/rolesanywhere.tf's local.rolesanywhere_test_workload_uri computes; the
+# rolesanywhere* values are the cluster-wide singletons (one trust anchor/profile per
+# cluster) the MutatingPolicy needs to render aws_signing_helper's credential_process
+# invocation. None of these can be read from Terraform directly - CEL has no notion of a
+# Terraform output - so they're handed across the same way this repo already bridges
+# Terraform values into other systems (see local_file.ansible_terraform_vars in
+# terraform/main.tf) - a small ConfigMap, applied here via envsubst from the same
+# `terraform output` used everywhere else in these docs. The per-workload IAM role ARN is
+# deliberately NOT here - that varies per ServiceAccount, so it travels via the
+# rke2-lab.internal/rolesanywhere-role-arn annotation instead (see
+# kyverno-rolesanywhere-mutation.yaml).
 #
-# Apply once, before manifests/kyverno-rolesanywhere-policies.yaml (which reads it):
+# Apply once, before manifests/kyverno-rolesanywhere-policies.yaml and
+# manifests/kyverno-rolesanywhere-mutation.yaml (both read this):
 #
 #   export CLUSTER_NAME=$(terraform -chdir=terraform output -raw cluster_name)
-#   envsubst '${CLUSTER_NAME}' < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#   export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_trust_anchor_arn)
+#   export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${AWS_REGION}' \
+#     < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
 
 apiVersion: v1
 kind: ConfigMap
@@ -18,3 +29,6 @@ metadata:
   namespace: kyverno
 data:
   clusterName: ${CLUSTER_NAME}
+  rolesanywhereTrustAnchorArn: ${ROLESANYWHERE_TRUST_ANCHOR_ARN}
+  rolesanywhereProfileArn: ${ROLESANYWHERE_PROFILE_ARN}
+  awsRegion: ${AWS_REGION}

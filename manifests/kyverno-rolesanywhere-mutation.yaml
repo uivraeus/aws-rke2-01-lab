@@ -1,0 +1,140 @@
+# Automates the Roles Anywhere pod-level wiring (fetch-signing-helper initContainer, the
+# signing-helper/aws-config emptyDir volumes, the rolesanywhere-tls Secret mount, the
+# AWS_CONFIG_FILE/AWS_REGION env vars) that manifests/rolesanywhere-test.yaml's Pod still
+# hand-writes - same role amazon-eks-pod-identity-webhook plays for IRSA
+# (manifests/pod-identity-webhook.yaml, docs/irsa.md), but as a Kyverno MutatingPolicy
+# instead of a bespoke Go webhook. See docs/rolesanywhere.md's Kyverno section for the full
+# write-up, including why this needs its own ServiceAccount annotation
+# (rke2-lab.internal/rolesanywhere-role-arn) distinct from IRSA's rke2-lab.internal/role-arn
+# - reusing that exact key would let a ServiceAccount set up to test IRSA accidentally also
+# trigger this policy, since both paths are commonly installed on the same cluster side by
+# side in this repo.
+#
+# CAVEAT: MutatingPolicy is CEL-based and stable since Kyverno 1.19 (the version already
+# running in this repo's cluster), but this is the least-precedented CEL shape used in this
+# repo so far - iterating and patching an *existing* list field (spec.containers) while
+# preserving whatever an app's own Pod spec already has, rather than building one brand-new
+# object from scratch the way the GeneratingPolicy does. Confirm with
+# `kubectl get mutatingpolicy` (ready/valid, no CEL compile error) and by inspecting an
+# actual mutated Pod's spec before trusting this file - see docs/rolesanywhere.md.
+#
+# Apply once, after manifests/kyverno-config.yaml (this reads that ConfigMap) and
+# manifests/kyverno-rolesanywhere-policies.yaml (the Certificate this mounts comes from
+# that policy's GeneratingPolicy):
+#
+#   kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-mutation.yaml
+
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
+metadata:
+  name: rolesanywhere-mutate-pod
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: ['CREATE']
+        resources: ['pods']
+  variables:
+    - name: saName
+      expression: 'object.spec.?serviceAccountName.orValue("default")'
+    - name: serviceAccount
+      expression: 'resource.Get("v1", "serviceaccounts", object.metadata.namespace, variables.saName)'
+    - name: saAnnotations
+      expression: 'variables.serviceAccount.metadata.?annotations.orValue({})'
+    # Same map-index gotcha as the GeneratingPolicy's matchConditions (see
+    # kyverno-rolesanywhere-policies.yaml's comment on it) - guard with `in` before
+    # indexing, don't rely on a bare has()/orValue() alone to make a missing key safe.
+    - name: shouldMutate
+      expression: >-
+        ('rke2-lab.internal/rolesanywhere-enabled' in variables.saAnnotations) &&
+        variables.saAnnotations['rke2-lab.internal/rolesanywhere-enabled'] == 'true' &&
+        ('rke2-lab.internal/rolesanywhere-role-arn' in variables.saAnnotations)
+    - name: roleArn
+      expression: >-
+        ('rke2-lab.internal/rolesanywhere-role-arn' in variables.saAnnotations) ?
+        variables.saAnnotations['rke2-lab.internal/rolesanywhere-role-arn'] : ''
+    - name: clusterConfig
+      expression: 'resource.Get("v1", "configmaps", "kyverno", "cluster-config").data'
+    - name: trustAnchorArn
+      expression: 'variables.clusterConfig.rolesanywhereTrustAnchorArn'
+    - name: profileArn
+      expression: 'variables.clusterConfig.rolesanywhereProfileArn'
+    - name: awsRegion
+      expression: 'variables.clusterConfig.awsRegion'
+    - name: secretName
+      expression: 'variables.saName + "-tls"'
+    - name: initScript
+      expression: >-
+        "set -eu\n" +
+        "curl -fsSL https://rolesanywhere.amazonaws.com/releases/1.8.5/X86_64/Linux/Amzn2023/aws_signing_helper -o /opt/bin/aws_signing_helper\n" +
+        "chmod +x /opt/bin/aws_signing_helper\n" +
+        "mkdir -p /opt/aws\n" +
+        "cat > /opt/aws/config <<EOF\n" +
+        "[default]\n" +
+        "credential_process = /opt/bin/aws_signing_helper credential-process --certificate /rolesanywhere/tls.crt --private-key /rolesanywhere/tls.key --trust-anchor-arn " + variables.trustAnchorArn + " --profile-arn " + variables.profileArn + " --role-arn " + variables.roleArn + " --region " + variables.awsRegion + "\n" +
+        "region = " + variables.awsRegion + "\n" +
+        "EOF\n"
+  mutations:
+    # Prepend the initContainer - same pinned curlimages/curl image and script as
+    # rolesanywhere-test.yaml's hand-written one, just CEL-templated instead of envsubst.
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          variables.shouldMutate ?
+          Object{
+            spec: Object.spec{
+              initContainers: [
+                Object.spec.initContainers{
+                  name: "fetch-signing-helper",
+                  image: "curlimages/curl:8.11.1",
+                  command: ["sh", "-c", variables.initScript],
+                  volumeMounts: [
+                    Object.spec.initContainers.volumeMounts{name: "signing-helper", mountPath: "/opt/bin"},
+                    Object.spec.initContainers.volumeMounts{name: "aws-config", mountPath: "/opt/aws"}
+                  ]
+                }
+              ] + object.spec.?initContainers.orValue([])
+            }
+          } : Object{}
+    # Append the shared volumes.
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          variables.shouldMutate ?
+          Object{
+            spec: Object.spec{
+              volumes: object.spec.?volumes.orValue([]) + [
+                Object.spec.volumes{name: "signing-helper", emptyDir: Object.spec.volumes.emptyDir{}},
+                Object.spec.volumes{name: "aws-config", emptyDir: Object.spec.volumes.emptyDir{}},
+                Object.spec.volumes{name: "rolesanywhere-tls", secret: Object.spec.volumes.secret{secretName: variables.secretName}}
+              ]
+            }
+          } : Object{}
+    # Append matching volumeMounts/env to every existing container - not just one named
+    # one, since a real app's Pod spec can have any container name(s). Only name is
+    # restated (needed as the merge key for the containers list); everything else an app
+    # already set (image, command, resources, ...) is expected to survive via
+    # server-side-apply's merge-by-name semantics, not verified live yet.
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          variables.shouldMutate ?
+          Object{
+            spec: Object.spec{
+              containers: object.spec.containers.map(c,
+                Object.spec.containers{
+                  name: c.name,
+                  volumeMounts: c.?volumeMounts.orValue([]) + [
+                    Object.spec.containers.volumeMounts{name: "signing-helper", mountPath: "/opt/bin", readOnly: true},
+                    Object.spec.containers.volumeMounts{name: "aws-config", mountPath: "/opt/aws", readOnly: true},
+                    Object.spec.containers.volumeMounts{name: "rolesanywhere-tls", mountPath: "/rolesanywhere", readOnly: true}
+                  ],
+                  env: c.?env.orValue([]) + [
+                    Object.spec.containers.env{name: "AWS_CONFIG_FILE", value: "/opt/aws/config"},
+                    Object.spec.containers.env{name: "AWS_REGION", value: variables.awsRegion}
+                  ]
+                }
+              )
+            }
+          } : Object{}
