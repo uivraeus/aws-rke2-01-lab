@@ -338,15 +338,57 @@ extended with three more keys - the role ARN is the only genuinely
 per-workload value, so it's the only one that travels via annotation rather
 than the shared `ConfigMap`.
 
-**Confidence caveat, not yet resolved as of writing**: this is the
-least-precedented CEL shape used across all three Roles Anywhere Kyverno
-policies - iterating and patching an *existing* list field
-(`spec.containers`) while preserving whatever an app's own `Pod` spec
-already set, rather than building one brand-new object from scratch the
-way the `GeneratingPolicy` does. Not yet live-verified at the time this
-section was written - see
-[`kyverno-rolesanywhere-mutation.yaml`](../manifests/kyverno-rolesanywhere-mutation.yaml)'s
-own header comment for what to check before trusting it.
+**Confirmed live** (2026-08-31, `rke2-lab-01` in `eu-north-1`): the fully
+automated Pod (`rolesanywhere-mutation-test.yaml` - no hand-written
+initContainer/volumes/env at all) reached `Running` with every field
+correctly injected, `aws sts get-caller-identity` and scoped S3 access
+worked exactly as they do with the hand-wired manifest, and the hand-wired
+manifest itself still works completely unaffected when applied on its own
+(no double-injection, no interference - confirmed by checking it still has
+exactly one `fetch-signing-helper` initContainer and exactly its own three
+volumes, not two of each).
+
+Getting there took three real, sequential CEL/Kubernetes-API discoveries,
+each one only found by an actual `kubectl apply` - the least-precedented
+CEL shape used across all three Roles Anywhere Kyverno policies, and it
+showed:
+
+1. **`ApplyConfiguration` cannot touch "atomic" fields at all** - a
+   Kubernetes API-level restriction, not a Kyverno bug. A container's
+   `command` (`[]string`) is one; the first draft tried to set it while
+   constructing a brand-new `initContainer` via `patchType:
+   ApplyConfiguration`, and the API server rejected the whole `Pod` outright:
+   `may not mutate atomic arrays, maps or structs: .spec.initContainers[0].command`.
+   Fixed by switching to `patchType: JSONPatch` instead, whose `value` is
+   plain JSON with no such restriction.
+2. **CEL map/list literals are statically homogeneous - one type for every
+   value - unlike JSON.** `{"name": "x", "readOnly": true}` (a string value
+   next to a bool one) doesn't type-check on its own, and wrapping the
+   *whole* literal in `dyn(...)` doesn't fix it - CEL infers a literal's
+   type from its own contents before an outer `dyn()` ever applies. What
+   actually works: `dyn(...)` around every individual *value* inside a
+   heterogeneous map, so each field is independently dyn-typed rather than
+   forcing one concrete type across the whole thing. Needed far more
+   pervasively than expected - nearly every value literal in the file.
+3. **CEL has no map-merge operator at all.** The natural-looking fix for
+   "add fields to an existing container without losing the rest of it" -
+   `c + dyn({"volumeMounts": ..., "env": ...})` - passed type-checking
+   (`dyn` defers everything to runtime) but failed at actual mutation time
+   with `no such overload: _+_`: `+` is defined for
+   numbers/strings/bytes/lists in CEL, never for two maps, dyn-typed or
+   not. Fixed properly, not worked around: `object.spec.containers.indexOf(c)`
+   builds one `JSONPatch` per container per field
+   (`/spec/containers/<index>/volumeMounts`, `.../env`), each `add`
+   replacing only that one list field with `<existing entries> + <new
+   ones>` (list concatenation, which *does* work). No patch path ever
+   references `image`/`command`/`ports`/`resources`/anything else, so it's
+   structurally impossible for this approach to drop them - confirmed live
+   by checking the mutated `aws-cli` container kept its own `command:
+   [sleep, infinity]` and its own `TEST_BUCKET_NAME` env var exactly as
+   written, alongside the injected ones.
+
+See [`kyverno-rolesanywhere-mutation.yaml`](../manifests/kyverno-rolesanywhere-mutation.yaml)'s
+own comments for all three, inline at the fix.
 
 ## Bootstrap sequence
 
@@ -539,16 +581,14 @@ is still holding onto.
 
 ## Not yet done
 
-- **Pod-level mutation still needs a fully independent live-verification
-  pass, on top of the `Certificate` chain's own.** `Certificate` creation
-  (`GeneratingPolicy`) and now pod wiring (`MutatingPolicy`, see "Pod-level
-  wiring" above) are both automated, but they're separate policies with
-  separate failure modes - a correctly-issued `Certificate` says nothing
-  about whether the `MutatingPolicy`'s CEL actually preserved an app's
-  existing container fields (image, command, ...) correctly while appending
-  to them, which is the least-precedented CEL shape used here. Re-verify
-  this specific claim after any Kyverno upgrade, not just the credential
-  chain end to end.
+- **Both `Certificate` creation and pod wiring are now automated
+  (`GeneratingPolicy` + `MutatingPolicy`, see "Pod-level wiring" above) -
+  confirmed live, including that an app's own container fields (`command`,
+  `TEST_BUCKET_NAME`, ...) survive the mutation untouched.** They're still
+  separate policies with separate failure modes, though - a correctly-issued
+  `Certificate` says nothing about whether the `MutatingPolicy` also
+  injected correctly. Re-verify both independently after any Kyverno
+  upgrade, not just the credential chain end to end.
 - **Certificates live in `Secret`s, readable by anyone with ordinary
   Secret-read RBAC - unlike this repo's other two paths.** cert-manager
   always writes the issued key material to a `kubernetes.io/tls` `Secret`
