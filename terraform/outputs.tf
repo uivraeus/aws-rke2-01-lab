@@ -115,12 +115,12 @@ output "rolesanywhere_test_bucket_name" {
 }
 
 output "rolesanywhere_ca_cert_pem" {
-  description = "PEM-encoded certificate of the Roles Anywhere root CA - load into cert-manager's ClusterIssuer (see manifests/rolesanywhere-ca-issuer.yaml), if enabled."
+  description = "PEM-encoded certificate of the Roles Anywhere root CA - load into cert-manager's ClusterIssuer (see rolesanywhere/manifests/infra/rolesanywhere-ca-issuer.yaml), if enabled."
   value       = var.enable_rolesanywhere ? tls_self_signed_cert.rolesanywhere_ca[0].cert_pem : null
 }
 
 output "rolesanywhere_ca_key_pem" {
-  description = "PEM-encoded private key of the Roles Anywhere root CA - load into cert-manager's ClusterIssuer (see manifests/rolesanywhere-ca-issuer.yaml), if enabled. Sensitive: this is the key that can mint certificates AWS will trust."
+  description = "PEM-encoded private key of the Roles Anywhere root CA - load into cert-manager's ClusterIssuer (see rolesanywhere/manifests/infra/rolesanywhere-ca-issuer.yaml), if enabled. Sensitive: this is the key that can mint certificates AWS will trust."
   value       = var.enable_rolesanywhere ? tls_private_key.rolesanywhere_ca[0].private_key_pem : null
   sensitive   = true
 }

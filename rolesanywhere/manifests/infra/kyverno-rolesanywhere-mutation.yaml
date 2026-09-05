@@ -1,9 +1,9 @@
 # Automates the Roles Anywhere pod-level wiring (fetch-signing-helper initContainer, the
 # signing-helper/aws-config emptyDir volumes, the rolesanywhere-tls Secret mount, the
-# AWS_CONFIG_FILE/AWS_REGION env vars) that manifests/rolesanywhere-test.yaml's Pod still
+# AWS_CONFIG_FILE/AWS_REGION env vars) that rolesanywhere/manifests/validation/rolesanywhere-test.yaml's Pod still
 # hand-writes - same role amazon-eks-pod-identity-webhook plays for IRSA
-# (manifests/pod-identity-webhook.yaml, docs/irsa.md), but as a Kyverno MutatingPolicy
-# instead of a bespoke Go webhook. See docs/rolesanywhere.md's Kyverno section for the full
+# (irsa/manifests/infra/pod-identity-webhook.yaml, irsa/docs/design.md), but as a Kyverno MutatingPolicy
+# instead of a bespoke Go webhook. See rolesanywhere/docs/design.md's Kyverno section for the full
 # write-up, including why this needs its own ServiceAccount annotation
 # (rke2-lab.internal/rolesanywhere-role-arn) distinct from IRSA's rke2-lab.internal/role-arn
 # - reusing that exact key would let a ServiceAccount set up to test IRSA accidentally also
@@ -12,16 +12,16 @@
 #
 # Confirmed live (2026-08-31): a fully-automated Pod (rolesanywhere-mutation-test.yaml)
 # reached Running with every field correctly injected, and the app's own container fields
-# (command, its own env vars) survived untouched - see docs/rolesanywhere.md's Kyverno
+# (command, its own env vars) survived untouched - see rolesanywhere/docs/design.md's Kyverno
 # section for the three real CEL/Kubernetes-API discoveries it took to get there (each
 # explained inline below, at the fix), and for why the mutations are JSONPatch throughout,
 # not ApplyConfiguration.
 #
-# Apply once, after manifests/kyverno-config.yaml (this reads that ConfigMap) and
-# manifests/kyverno-rolesanywhere-policies.yaml (the Certificate this mounts comes from
+# Apply once, after shared/manifests/kyverno-config.yaml (this reads that ConfigMap) and
+# rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml (the Certificate this mounts comes from
 # that policy's GeneratingPolicy):
 #
-#   kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-mutation.yaml
+#   kubectl --kubeconfig kubeconfig apply -f rolesanywhere/manifests/infra/kyverno-rolesanywhere-mutation.yaml
 
 apiVersion: policies.kyverno.io/v1
 kind: MutatingPolicy

@@ -1,6 +1,6 @@
 # Kyverno automation for the vault-aws-credential-helper path - a MutatingPolicy that
 # injects everything a pod needs to get rotating AWS credentials via Vault, with NO
-# Vault Agent Injector involved at all. See docs/vault.md's
+# Vault Agent Injector involved at all. See vault/docs/design.md's
 # "Kyverno + vault-aws-credential-helper" section for the full write-up.
 #
 # Unlike the Vault Agent Injector path, there's exactly one mutating webhook involved
@@ -16,7 +16,7 @@
 # file) to an emptyDir. Deliberately not a ConfigMap/GeneratingPolicy: that would need
 # either a manual per-namespace install (defeats the point) or a generate+clone-to-every-
 # namespace policy needing its own background-controller RBAC grant (the same question
-# manifests/kyverno-rolesanywhere-policies.yaml had to answer for cert-manager
+# rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml had to answer for cert-manager
 # Certificates) - an init-container writing to an emptyDir is pure admission-time
 # JSONPatch, exactly like this same file's own image-volume/env mutations, and needs no
 # extra RBAC at all.
@@ -32,12 +32,12 @@
 # VAULT_ROLE is derived from the ServiceAccount's own name (matches this repo's
 # existing convention - terraform-vault's Kubernetes auth role is named identically to
 # the ServiceAccount authenticating with it), not a third annotation. VAULT_ADDR comes
-# from the kyverno/cluster-config ConfigMap (manifests/kyverno-config.yaml) - one Vault
+# from the kyverno/cluster-config ConfigMap (shared/manifests/kyverno-config.yaml) - one Vault
 # instance per cluster, so it's a cluster-wide constant, not per-app.
 #
-# Apply once, after manifests/kyverno-config.yaml (this reads that ConfigMap):
+# Apply once, after shared/manifests/kyverno-config.yaml (this reads that ConfigMap):
 #
-#   kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-vault-cred-helper-mutation.yaml
+#   kubectl --kubeconfig kubeconfig apply -f vault/manifests/infra/kyverno-vault-cred-helper-mutation.yaml
 
 apiVersion: policies.kyverno.io/v1
 kind: MutatingPolicy

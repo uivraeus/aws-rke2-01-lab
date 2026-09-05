@@ -21,8 +21,8 @@
 #     AWS SDK just reads AWS_WEB_IDENTITY_TOKEN_FILE, which the webhook itself points
 #     at whatever path this is set to).
 #
-# See manifests/irsa-test.yaml (the ServiceAccount this webhook now actually acts on)
-# and manifests/irsa-webhook-test.yaml (the pod proving it).
+# See irsa/manifests/validation/irsa-test.yaml (the ServiceAccount this webhook now actually acts on)
+# and irsa/manifests/validation/irsa-webhook-test.yaml (the pod proving it).
 
 apiVersion: v1
 kind: Namespace

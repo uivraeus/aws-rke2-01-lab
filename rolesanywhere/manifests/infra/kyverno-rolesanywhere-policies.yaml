@@ -1,9 +1,9 @@
 # Kyverno automation + misconfiguration guard for the Roles Anywhere path - see
-# docs/rolesanywhere.md's Kyverno section for the full write-up. Two independent policies:
+# rolesanywhere/docs/design.md's Kyverno section for the full write-up. Two independent policies:
 #
 # - GeneratingPolicy: watches ServiceAccounts for an opt-in annotation
 #   (rke2-lab.internal/rolesanywhere-enabled: "true" - reusing this repo's existing custom
-#   annotation prefix from the IRSA pod-identity-webhook, see docs/irsa.md) and generates a
+#   annotation prefix from the IRSA pod-identity-webhook, see irsa/docs/design.md) and generates a
 #   cert-manager Certificate for it automatically, deriving the workload-id:// URI from the
 #   ServiceAccount's own namespace/name - the same value a human would otherwise have to
 #   type by hand in two places (the Certificate and the matching IAM trust policy condition
@@ -25,14 +25,14 @@
 # ConfigMap lookup and the generate template's (( ... )) interpolation syntax both worked
 # exactly as drafted. Two real bugs did surface, both fixed below and explained inline where
 # fixed: a CEL map-key-lookup gotcha in the GeneratingPolicy's matchConditions, and a missing
-# RBAC grant for Kyverno's background-controller. See docs/rolesanywhere.md's Kyverno section
+# RBAC grant for Kyverno's background-controller. See rolesanywhere/docs/design.md's Kyverno section
 # for the full writeup, including a pod/Certificate application-order gotcha this surfaced
 # that isn't a bug in this file (a Pod applied before its Certificate/Secret exists gets
 # stuck retrying a volume mount and needs a delete+recreate, not a self-heal).
 #
-# Apply once, after manifests/kyverno-config.yaml (this reads that ConfigMap):
+# Apply once, after shared/manifests/kyverno-config.yaml (this reads that ConfigMap):
 #
-#   kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-policies.yaml
+#   kubectl --kubeconfig kubeconfig apply -f rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml
 
 ---
 # Kyverno's background-controller (which runs `generate` rules) has no built-in permission
@@ -112,7 +112,7 @@ spec:
             # Deleting the ServiceAccount cascades to delete this Certificate (and the
             # Secret cert-manager wrote for it) via ordinary Kubernetes garbage collection -
             # not yet confirmed live as of the first pass of this file (see
-            # docs/rolesanywhere.md's Kyverno section).
+            # rolesanywhere/docs/design.md's Kyverno section).
             ownerReferences:
               - apiVersion: v1
                 kind: ServiceAccount
@@ -127,7 +127,7 @@ spec:
               - digital signature
               - key encipherment
               - client auth
-            # Non-empty Subject required by Roles Anywhere (see docs/rolesanywhere.md) -
+            # Non-empty Subject required by Roles Anywhere (see rolesanywhere/docs/design.md) -
             # not part of the identity anything actually authorizes on, that's the URI below.
             commonName: (( variables.saName ))
             issuerRef:

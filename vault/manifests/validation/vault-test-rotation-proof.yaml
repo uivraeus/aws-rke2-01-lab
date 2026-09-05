@@ -1,5 +1,5 @@
-# Live proof for docs/aws-sdk-credential-caching.md: three long-running readers pointed
-# at the same naively-injected AWS_SHARED_CREDENTIALS_FILE (manifests/vault-agent-config-raw.yaml
+# Live proof for vault/docs/aws-sdk-credential-caching.md: three long-running readers pointed
+# at the same naively-injected AWS_SHARED_CREDENTIALS_FILE (vault/manifests/infra/vault-agent-config-raw.yaml
 # - no credential_process, no Expiration field), polling every 30s and logging the last
 # few characters of whichever AccessKeyId each one currently believes is current:
 #
@@ -11,25 +11,25 @@
 #                  tidy` fetches aws-sdk-go-v2 from the public Go module proxy
 #                  (proxy.golang.org) over HTTPS at container start - a module fetch, not
 #                  a container/OCI registry push - so it needs outbound HTTPS egress from
-#                  the pod, same as manifests/vault-test.yaml's `apk add jq` init step.
+#                  the pod, same as vault/manifests/validation/vault-test.yaml's `apk add jq` init step.
 #
-# Expected result (see docs/aws-sdk-credential-caching.md): after Vault Agent re-renders
+# Expected result (see vault/docs/aws-sdk-credential-caching.md): after Vault Agent re-renders
 # the file with a new lease (wait out terraform-vault's default_sts_ttl - forced
 # revocation doesn't trigger an early re-fetch for non-renewable assumed_role
-# credentials, per docs/vault.md's "Proving rotation" note), aws-cli's logged key changes on
+# credentials, per vault/docs/design.md's "Proving rotation" note), aws-cli's logged key changes on
 # its next line while python-boto3 and go-sdk keep logging the pre-rotation key until the
 # pod is restarted.
 #
 # Prerequisite: the "vault-test" namespace/ServiceAccount/Vault role already exist
-# (applied via manifests/vault-test.yaml or manifests/vault-test-injector.yaml), and the
+# (applied via vault/manifests/validation/vault-test.yaml or vault/manifests/validation/vault-test-injector.yaml), and the
 # injector is installed (`make injector-vault`). Apply the Vault Agent config
-# (manifests/vault-agent-config-raw.yaml) first, same two-step shape as
-# manifests/vault-agent-config.yaml + manifests/vault-test-injector.yaml:
+# (vault/manifests/infra/vault-agent-config-raw.yaml) first, same two-step shape as
+# vault/manifests/infra/vault-agent-config.yaml + vault/manifests/validation/vault-test-injector.yaml:
 #
 #   export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
-#   envsubst '${VAULT_PRIVATE_IP}' < manifests/vault-agent-config-raw.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#   envsubst '${VAULT_PRIVATE_IP}' < vault/manifests/infra/vault-agent-config-raw.yaml | kubectl --kubeconfig kubeconfig apply -f -
 #   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-#   envsubst '${AWS_REGION}' < manifests/vault-test-rotation-proof.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#   envsubst '${AWS_REGION}' < vault/manifests/validation/vault-test-rotation-proof.yaml | kubectl --kubeconfig kubeconfig apply -f -
 #
 # Watch all three across a rotation:
 #

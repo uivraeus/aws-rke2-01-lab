@@ -8,7 +8,7 @@
 # create-a-TokenReview/SubjectAccessReview, nothing else.
 #
 # Apply once, before the first `terraform -chdir=terraform-vault apply`:
-#   kubectl --kubeconfig kubeconfig apply -f manifests/vault-k8s-auth.yaml
+#   kubectl --kubeconfig kubeconfig apply -f vault/manifests/infra/vault-k8s-auth.yaml
 
 apiVersion: v1
 kind: Namespace

@@ -1,7 +1,7 @@
 # Shared Vault Agent config, referenced via vault.hashicorp.com/agent-configmap so app
 # pods only need two trivial annotations (agent-inject + agent-configmap) instead of
 # hand-writing a Consul-Template snippet and a shell script per pod - see
-# manifests/vault-test-injector.yaml and docs/vault.md's "Vault Agent Injector" section.
+# vault/manifests/validation/vault-test-injector.yaml and vault/docs/design.md's "Vault Agent Injector" section.
 #
 # Using agent-configmap means the injector's own auto-generated Vault Agent config is
 # skipped entirely - config-init.hcl (the one-shot init container) and config.hcl (the
@@ -12,7 +12,7 @@
 # cluster-scoped). Apply before the pod, with ${VAULT_PRIVATE_IP} substituted:
 #
 #   export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
-#   envsubst '${VAULT_PRIVATE_IP}' < manifests/vault-agent-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#   envsubst '${VAULT_PRIVATE_IP}' < vault/manifests/infra/vault-agent-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
 #
 # The template/command content below is unchanged from the annotation-based version
 # proven live earlier (same Sprig-function-unavailable workaround, same atomic

@@ -14,14 +14,14 @@
 #   export VAULT_ADDR="http://$(terraform -chdir=terraform output -raw vault_private_ip):8200"
 #   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
 #   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-#   envsubst < manifests/vault-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#   envsubst < vault/manifests/validation/vault-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 #
 # vault-test namespace/serviceaccount names below must match
 # var.vault_namespace/var.vault_service_account_name in terraform-vault (defaults:
 # "vault-test"/"vault-test") - they're baked into the Kubernetes auth backend role's
 # bound_service_account_names/namespaces.
 #
-# manifests/vault-cred-helper-test.yaml is a self-sufficient, mutually exclusive
+# vault/manifests/validation/vault-cred-helper-test.yaml is a self-sufficient, mutually exclusive
 # alternative demo (Kyverno + vault-aws-credential-helper, no Vault Agent Injector) -
 # it declares this same Namespace/ServiceAccount (required, not a naming choice - see
 # its own header comment) with different annotations. Apply one demo or the other,

@@ -1,21 +1,21 @@
-# Vault Agent config for docs/aws-sdk-credential-caching.md's rotation-caching proof.
+# Vault Agent config for vault/docs/aws-sdk-credential-caching.md's rotation-caching proof.
 #
 # Deliberately the *naive* path this repo's Vault evaluation moved away from: a plain
 # AWS_SHARED_CREDENTIALS_FILE with no Expiration field and no credential_process layer
-# (contrast with manifests/vault-agent-config.yaml, which renders exactly that on top of
+# (contrast with vault/manifests/infra/vault-agent-config.yaml, which renders exactly that on top of
 # the same secret). Reuses the same "vault-test" Kubernetes auth role and
 # "aws/creds/vault-test" AWS secrets engine role as the rest of manifests/ - no new
 # Vault/Terraform setup needed, just a different render.
 #
-# Same agent-configmap contract as manifests/vault-agent-config.yaml (config-init.hcl /
+# Same agent-configmap contract as vault/manifests/infra/vault-agent-config.yaml (config-init.hcl /
 # config.hcl picked apart by exact filename, identical except exit_after_auth) - see that
-# file's header comment and docs/vault.md's "Vault Agent Injector" section for the general
+# file's header comment and vault/docs/design.md's "Vault Agent Injector" section for the general
 # mechanism. Apply before the pod, with ${VAULT_PRIVATE_IP} substituted:
 #
 #   export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
-#   envsubst '${VAULT_PRIVATE_IP}' < manifests/vault-agent-config-raw.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#   envsubst '${VAULT_PRIVATE_IP}' < vault/manifests/infra/vault-agent-config-raw.yaml | kubectl --kubeconfig kubeconfig apply -f -
 #
-# Apply before manifests/vault-test-rotation-proof.yaml - see that file's header for the
+# Apply before vault/manifests/validation/vault-test-rotation-proof.yaml - see that file's header for the
 # full two-step sequence.
 
 apiVersion: v1

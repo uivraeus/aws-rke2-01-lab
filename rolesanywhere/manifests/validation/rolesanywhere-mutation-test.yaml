@@ -1,12 +1,12 @@
 # Automated Roles Anywhere verification via the Kyverno MutatingPolicy - no hand-wired
-# initContainer/volumes/env at all. Contrast with manifests/rolesanywhere-test.yaml (the
+# initContainer/volumes/env at all. Contrast with rolesanywhere/manifests/validation/rolesanywhere-test.yaml (the
 # hand-wired Pod, which sets all of that directly in its own spec since no mutating policy
 # was involved there). Here there's none of that - just two ServiceAccount annotations. The
-# MutatingPolicy (installed via manifests/kyverno-rolesanywhere-mutation.yaml) sees them at
+# MutatingPolicy (installed via rolesanywhere/manifests/infra/kyverno-rolesanywhere-mutation.yaml) sees them at
 # pod admission time and injects everything else itself, the same relationship
 # irsa-webhook-test.yaml already has to irsa-test.yaml.
 #
-# Self-contained and mutually exclusive with manifests/rolesanywhere-test.yaml - both create
+# Self-contained and mutually exclusive with rolesanywhere/manifests/validation/rolesanywhere-test.yaml - both create
 # identically-named Namespace/ServiceAccount/Pod objects (required to match the IAM role's
 # trust policy condition - see rolesanywhere.tf), demonstrating the same end-to-end Roles
 # Anywhere chain two different ways. Apply only one of the two at a time; switching means
@@ -20,7 +20,7 @@
 #   export ROLESANYWHERE_ROLE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_role_arn)
 #   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw rolesanywhere_test_bucket_name)
 #   envsubst '${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME}' \
-#     < manifests/rolesanywhere-mutation-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#     < rolesanywhere/manifests/validation/rolesanywhere-mutation-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 #
 # rolesanywhere-test namespace/serviceaccount names below must match
 # var.rolesanywhere_namespace/var.rolesanywhere_service_account_name (defaults:

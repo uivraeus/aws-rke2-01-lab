@@ -1,6 +1,6 @@
 # AWS Roles Anywhere
 
-Part of this repo's exploration of bridging RKE2 workload identity into AWS IAM/STS — see the [main README](../README.md) for cluster prerequisites and bootstrap steps.
+Part of this repo's exploration of bridging RKE2 workload identity into AWS IAM/STS — see the [main README](../../README.md) for cluster prerequisites and bootstrap steps.
 
 A third, independent path for pods to get scoped AWS credentials, evaluated
 alongside IRSA and Vault. Roles Anywhere is fundamentally different from
@@ -9,7 +9,7 @@ against a registered CA ("Trust Anchor"), not a Kubernetes-native token -
 IRSA uses the cluster's own OIDC-issued ServiceAccount token, Vault uses that
 same token via its Kubernetes auth method, but pods have no built-in X.509
 identity at all. **[cert-manager](https://cert-manager.io/)** (already a
-repo dependency - see [irsa.md](irsa.md)'s `make cert-manager` prerequisite
+repo dependency - see [irsa/docs/design.md](../../irsa/docs/design.md)'s `make cert-manager` prerequisite
 for the pod-identity webhook) is the bridge here: it issues short-lived,
 per-workload leaf certificates from a self-signed root CA that Terraform
 also registers directly with AWS as the Roles Anywhere Trust Anchor.
@@ -23,11 +23,11 @@ certificates); the convention below is this repo's own answer to that,
 chosen deliberately rather than copied from a spec.
 
 **Entirely opt-in and off by default** - everything in
-[`terraform/rolesanywhere.tf`](../terraform/rolesanywhere.tf) is gated
+[`terraform/rolesanywhere.tf`](../../terraform/rolesanywhere.tf) is gated
 behind `enable_rolesanywhere` (default `false`), independent of
 `enable_vault`. Set `enable_rolesanywhere = true` in `terraform.tfvars` (or
 `-var enable_rolesanywhere=true`) before bootstrapping - see
-[terraform.tfvars.example](../terraform/terraform.tfvars.example).
+[terraform.tfvars.example](../../terraform/terraform.tfvars.example).
 
 What gets provisioned when `enable_rolesanywhere = true`:
 
@@ -63,7 +63,7 @@ What gets provisioned when `enable_rolesanywhere = true`:
 
 Each Roles Anywhere IAM role needs a trust-policy condition that scopes it
 to exactly one certificate identity - the same job IRSA's `sub`-claim
-condition does in [`irsa.tf`](../terraform/irsa.tf). Roles Anywhere can
+condition does in [`irsa.tf`](../../terraform/irsa.tf). Roles Anywhere can
 populate a session's principal tags from the presented certificate's
 Subject/SAN fields once `sts:TagSession` is granted, so any of those fields
 can be used as the condition variable
@@ -89,7 +89,7 @@ already has an implementation sitting in
 stuck only on a maintainer running acceptance tests. Until that ships, this
 repo works around it with a `terraform_data` + `local-exec` resource right
 after `aws_rolesanywhere_profile` in
-[`rolesanywhere.tf`](../terraform/rolesanywhere.tf) (see its own comment for
+[`rolesanywhere.tf`](../../terraform/rolesanywhere.tf) (see its own comment for
 the reasoning and its real limitation - no drift detection/repair, since a
 `local-exec` provisioner has no read step) - delete it once #48211 lands in
 a release.
@@ -104,7 +104,7 @@ workload-id://<cluster_name>.internal/ns/<namespace>/sa/<service-account>
 and each role's trust policy conditions on `aws:PrincipalTag/x509SAN/URI`
 matching that exact string
 (see `local.rolesanywhere_test_workload_uri` in
-[`rolesanywhere.tf`](../terraform/rolesanywhere.tf)).
+[`rolesanywhere.tf`](../../terraform/rolesanywhere.tf)).
 
 Why this shape specifically:
 
@@ -193,15 +193,15 @@ Two related gaps in the design above, addressed with
   whatever `spec.uris` says, with no notion that it should match the
   requesting namespace.
 
-[`manifests/kyverno-rolesanywhere-policies.yaml`](../manifests/kyverno-rolesanywhere-policies.yaml)
+[`rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml`](../manifests/infra/kyverno-rolesanywhere-policies.yaml)
 has two policies:
 
 - **`GeneratingPolicy`** - watches `ServiceAccount`s for the
   `rke2-lab.internal/rolesanywhere-enabled: "true"` annotation (reusing this
   repo's existing custom annotation prefix from the IRSA pod-identity-webhook,
-  see [irsa.md](irsa.md)) and generates a matching `Certificate`
+  see [irsa/docs/design.md](../../irsa/docs/design.md)) and generates a matching `Certificate`
   automatically, deriving the `workload-id://` URI from the ServiceAccount's
-  own namespace/name via [`manifests/kyverno-config.yaml`](../manifests/kyverno-config.yaml)'s
+  own namespace/name via [`shared/manifests/kyverno-config.yaml`](../../shared/manifests/kyverno-config.yaml)'s
   `cluster-config` `ConfigMap` (a `GeneratingPolicy`'s CEL has no way to read
   a Terraform output directly, so the cluster name is bridged across the
   same way `local_file.ansible_terraform_vars` already bridges other
@@ -213,7 +213,7 @@ has two policies:
   namespace. Deliberately scoped to that one `ClusterIssuer` specifically
   (via a `matchConditions` check on `spec.issuerRef.name`), so it can't
   interfere with `pod-identity-webhook`'s own, unrelated self-signed
-  cert-manager `Certificate` ([irsa.md](irsa.md)).
+  cert-manager `Certificate` ([irsa/docs/design.md](../../irsa/docs/design.md)).
 
 **Both target *accidental* misconfiguration - typos, a copy-pasted
 `Certificate` with the wrong namespace left in - not a defense against a
@@ -233,78 +233,13 @@ deprecated in Kyverno 1.17 (Feb 2026), with removal planned for 1.20 (Oct
 *"The legacy kyverno.io policy types are deprecated and will be removed in a
 future release. Migrate to their policies.kyverno.io replacements..."*.
 
-**Confirmed live** (2026-08-30, `rke2-lab` in `eu-north-1`): the full chain
-- annotate a `ServiceAccount`, `Certificate` appears automatically with the
-correct `workload-id://` URI, the pod's `aws sts get-caller-identity` and
-scoped S3 access work exactly as they did with the hand-written `Certificate`,
-and the `ValidatingPolicy` actually rejects a namespace-mismatched
-`Certificate` while leaving one targeting an unrelated issuer untouched.
-Two real bugs surfaced getting there, both fixed in
-[`kyverno-rolesanywhere-policies.yaml`](../manifests/kyverno-rolesanywhere-policies.yaml)
-and explained inline where fixed - flagged here because both produced
-misleading signals, the same pattern as the two trust-policy bugs earlier
-in this doc:
-
-- **CEL's map index operator throws, it doesn't return false.**
-  `object.metadata.annotations['some-key']` errors with `no such key` if the
-  map doesn't have that key at all - `has(object.metadata.annotations)`
-  only confirms the *map itself* exists, not that this specific key does.
-  Every `ServiceAccount` in the cluster without the opt-in annotation
-  (`cert-manager`'s own, `kube-system`'s, ...) made the `matchConditions`
-  error rather than simply not match, spamming failed `UpdateRequest`s. Fix:
-  guard the lookup with `'key' in map` first.
-- **Kyverno's `background-controller` (which runs `generate`) has no
-  built-in permission for arbitrary CRDs.** The `GeneratingPolicy` reported
-  `status.ready: true` - it compiled fine - but every actual generation
-  attempt failed with `certificates.cert-manager.io is forbidden`. Its
-  `ClusterRole` is deliberately empty and aggregates in anything labeled
-  `rbac.kyverno.io/aggregate-to-background-controller: "true"` (see
-  `kubectl get clusterrole kyverno:background-controller -o yaml` - an
-  `aggregationRule`, no `ClusterRoleBinding` to hunt for), so the fix is a
-  small separate `ClusterRole` with that label, not a workaround bolted on
-  elsewhere.
-
-**Cleanup on `ServiceAccount` deletion, confirmed live in a follow-up pass**:
-deleting the annotated `ServiceAccount` needed two separate fixes to fully
-clean up after itself, not one:
-
-- The generated `Certificate` sets `metadata.ownerReferences` pointing at
-  the triggering `ServiceAccount` (`uid`/`name`/`kind`), so ordinary
-  Kubernetes garbage collection deletes it when the `ServiceAccount` is
-  deleted - confirmed live, works because both are always in the same
-  namespace (owner references require that).
-- That alone left the `Secret` cert-manager wrote for the `Certificate`
-  dangling - confirmed live: `ownerReferences` cascades `ServiceAccount` ->
-  `Certificate`, but cert-manager doesn't link `Secret` -> `Certificate` by
-  default (`enableCertificateOwnerRef: false` is the chart default,
-  deliberately - deleting a `Certificate` by itself does *not* delete its
-  Secret unless this is turned on). Fixed by setting
-  `enableCertificateOwnerRef=true` on the `make cert-manager` Helm install
-  (see the `Makefile`'s comment on that target for why this is safe to set
-  cluster-wide, including for `pod-identity-webhook`'s own unrelated
-  Certificate).
-
-With both in place, deleting a `ServiceAccount` now leaves nothing behind -
-confirmed by deleting one and finding neither its `Certificate` nor its
-`Secret` still present a few seconds later.
-
-**A related, non-bug gotcha, corrected after a second, more patient live
-test**: a `Pod` applied *before* its `Certificate`/`Secret` exists sits at
-`Init:0/1` retrying the volume mount (`FailedMount ... secret "..." not
-found`). An earlier version of this doc claimed this needed a manual
-`kubectl delete pod` to clear, based on giving up after only about a minute
-of watching - **that claim was wrong**. Confirmed live with a deliberately
-delayed `Secret` (and no pod deletion at all): kubelet's own volume-mount
-retry loop backs off between repeated failures on the same pod, so the gap
-between attempts grows the longer it's been stuck (observed successive
-`FailedMount` events roughly 5 minutes apart late in the backoff, versus
-seconds apart early on) - but it does keep retrying, and the pod reached
-`Running` on its own within a couple of minutes of the `Secret` actually
-existing, no intervention needed. In practice this window rarely opens at
-all: with the `GeneratingPolicy`'s RBAC correctly in place (as shipped),
-the `Certificate` typically appears within a second or two of the
-`ServiceAccount`, well before a freshly-scheduled pod even attempts its
-first mount.
+Confirmed live end to end 2026-08-30, including a namespace-mismatch rejection
+and full cleanup on `ServiceAccount` deletion, and a since-corrected doc claim
+about a `Pod`-stuck-at-`Init:0/1` gotcha (kubelet's own retry loop clears it on
+its own, no manual pod deletion needed) - see
+[worklog.md](worklog.md#2026-08-30--kyverno-generatingpolicyvalidatingpolicy-rke2-lab-in-eu-north-1)
+for the two CEL/RBAC bugs found getting there and the full cleanup/retry-loop
+detail.
 
 ### Pod-level wiring (Kyverno `MutatingPolicy`)
 
@@ -313,11 +248,11 @@ The `GeneratingPolicy`/`ValidatingPolicy` above only ever reach the
 initContainer, the `signing-helper`/`aws-config` `emptyDir` volumes, the
 `rolesanywhere-tls` `Secret` mount, `AWS_CONFIG_FILE`/`AWS_REGION`) still
 had to be hand-written in every `Pod` spec, exactly like
-`rolesanywhere-test.yaml`'s. [`manifests/kyverno-rolesanywhere-mutation.yaml`](../manifests/kyverno-rolesanywhere-mutation.yaml)
+`rolesanywhere-test.yaml`'s. [`rolesanywhere/manifests/infra/kyverno-rolesanywhere-mutation.yaml`](../manifests/infra/kyverno-rolesanywhere-mutation.yaml)
 closes that gap with a `MutatingPolicy` - the same role
 `amazon-eks-pod-identity-webhook` already plays for IRSA in this repo
-(`docs/irsa.md`), but expressed as a Kyverno CEL policy instead of a
-bespoke Go webhook. [`manifests/rolesanywhere-mutation-test.yaml`](../manifests/rolesanywhere-mutation-test.yaml)
+(`irsa/docs/design.md`), but expressed as a Kyverno CEL policy instead of a
+bespoke Go webhook. [`rolesanywhere/manifests/validation/rolesanywhere-mutation-test.yaml`](../manifests/validation/rolesanywhere-mutation-test.yaml)
 is the fully-automated counterpart to `rolesanywhere-test.yaml`, the same
 relationship `irsa-webhook-test.yaml` already has to `irsa-test.yaml` -
 mutually exclusive, identically-named objects, just two `ServiceAccount`
@@ -338,57 +273,16 @@ extended with three more keys - the role ARN is the only genuinely
 per-workload value, so it's the only one that travels via annotation rather
 than the shared `ConfigMap`.
 
-**Confirmed live** (2026-08-31, `rke2-lab-01` in `eu-north-1`): the fully
-automated Pod (`rolesanywhere-mutation-test.yaml` - no hand-written
-initContainer/volumes/env at all) reached `Running` with every field
-correctly injected, `aws sts get-caller-identity` and scoped S3 access
-worked exactly as they do with the hand-wired manifest, and the hand-wired
-manifest itself still works completely unaffected when applied on its own
-(no double-injection, no interference - confirmed by checking it still has
-exactly one `fetch-signing-helper` initContainer and exactly its own three
-volumes, not two of each).
-
-Getting there took three real, sequential CEL/Kubernetes-API discoveries,
-each one only found by an actual `kubectl apply` - the least-precedented
-CEL shape used across all three Roles Anywhere Kyverno policies, and it
-showed:
-
-1. **`ApplyConfiguration` cannot touch "atomic" fields at all** - a
-   Kubernetes API-level restriction, not a Kyverno bug. A container's
-   `command` (`[]string`) is one; the first draft tried to set it while
-   constructing a brand-new `initContainer` via `patchType:
-   ApplyConfiguration`, and the API server rejected the whole `Pod` outright:
-   `may not mutate atomic arrays, maps or structs: .spec.initContainers[0].command`.
-   Fixed by switching to `patchType: JSONPatch` instead, whose `value` is
-   plain JSON with no such restriction.
-2. **CEL map/list literals are statically homogeneous - one type for every
-   value - unlike JSON.** `{"name": "x", "readOnly": true}` (a string value
-   next to a bool one) doesn't type-check on its own, and wrapping the
-   *whole* literal in `dyn(...)` doesn't fix it - CEL infers a literal's
-   type from its own contents before an outer `dyn()` ever applies. What
-   actually works: `dyn(...)` around every individual *value* inside a
-   heterogeneous map, so each field is independently dyn-typed rather than
-   forcing one concrete type across the whole thing. Needed far more
-   pervasively than expected - nearly every value literal in the file.
-3. **CEL has no map-merge operator at all.** The natural-looking fix for
-   "add fields to an existing container without losing the rest of it" -
-   `c + dyn({"volumeMounts": ..., "env": ...})` - passed type-checking
-   (`dyn` defers everything to runtime) but failed at actual mutation time
-   with `no such overload: _+_`: `+` is defined for
-   numbers/strings/bytes/lists in CEL, never for two maps, dyn-typed or
-   not. Fixed properly, not worked around: `object.spec.containers.indexOf(c)`
-   builds one `JSONPatch` per container per field
-   (`/spec/containers/<index>/volumeMounts`, `.../env`), each `add`
-   replacing only that one list field with `<existing entries> + <new
-   ones>` (list concatenation, which *does* work). No patch path ever
-   references `image`/`command`/`ports`/`resources`/anything else, so it's
-   structurally impossible for this approach to drop them - confirmed live
-   by checking the mutated `aws-cli` container kept its own `command:
-   [sleep, infinity]` and its own `TEST_BUCKET_NAME` env var exactly as
-   written, alongside the injected ones.
-
-See [`kyverno-rolesanywhere-mutation.yaml`](../manifests/kyverno-rolesanywhere-mutation.yaml)'s
-own comments for all three, inline at the fix.
+Confirmed live 2026-08-31: the fully automated Pod reached `Running` with every
+field correctly injected, and the hand-wired manifest still works unaffected
+when applied on its own (no double-injection). Getting there took three
+sequential CEL/Kubernetes-API discoveries - no `ApplyConfiguration` on atomic
+fields, CEL's heterogeneous-literal `dyn()` requirement, no CEL map-merge
+operator - see
+[`kyverno-rolesanywhere-mutation.yaml`](../manifests/infra/kyverno-rolesanywhere-mutation.yaml)'s
+own comments for all three inline at the fix, or
+[worklog.md](worklog.md#2026-08-31--kyverno-mutatingpolicy-pod-wiring-rke2-lab-01-in-eu-north-1)
+for the full narrative.
 
 ## Bootstrap sequence
 
@@ -400,7 +294,7 @@ make tunnel-k8s         # in its own shell, leave it running - the Helm installs
                         # `kubectl`/`helm --kubeconfig kubeconfig` to reach the cluster,
                         # which (per the main README) means localhost:6443 tunneled to the
                         # control node, not the internet
-make cert-manager       # if not already installed (also needed for irsa.md's webhook)
+make cert-manager       # if not already installed (also needed for irsa/docs/design.md's webhook)
 make kyverno             # if not already installed
 ```
 
@@ -420,16 +314,16 @@ the test workload (open `make tunnel-k8s` in another shell first):
 export ROLESANYWHERE_CA_CERT_B64=$(terraform -chdir=terraform output -raw rolesanywhere_ca_cert_pem | base64 -w0)
 export ROLESANYWHERE_CA_KEY_B64=$(terraform -chdir=terraform output -raw rolesanywhere_ca_key_pem | base64 -w0)
 envsubst '${ROLESANYWHERE_CA_CERT_B64} ${ROLESANYWHERE_CA_KEY_B64}' \
-  < manifests/rolesanywhere-ca-issuer.yaml | kubectl --kubeconfig kubeconfig apply -f -
+  < rolesanywhere/manifests/infra/rolesanywhere-ca-issuer.yaml | kubectl --kubeconfig kubeconfig apply -f -
 
 export CLUSTER_NAME=$(terraform -chdir=terraform output -raw cluster_name)
 export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_trust_anchor_arn)
 export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
 export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
 envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${AWS_REGION}' \
-  < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
-kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-policies.yaml
-kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-rolesanywhere-mutation.yaml
+  < shared/manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+kubectl --kubeconfig kubeconfig apply -f rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml
+kubectl --kubeconfig kubeconfig apply -f rolesanywhere/manifests/infra/kyverno-rolesanywhere-mutation.yaml
 kubectl --kubeconfig kubeconfig get generatingpolicy,validatingpolicy,mutatingpolicy   # all three should show a ready/valid status
 
 export ROLESANYWHERE_ROLE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_role_arn)
@@ -438,12 +332,12 @@ export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw rolesanywhere_t
 # Either the hand-wired Pod (all wiring explicit, useful as a reference for what the
 # MutatingPolicy is actually doing on your behalf):
 envsubst '${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
-  < manifests/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+  < rolesanywhere/manifests/validation/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 
 # ...or the fully-automated one (mutually exclusive with the above - delete
 # `kubectl delete namespace rolesanywhere-test` first if switching):
 envsubst '${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME}' \
-  < manifests/rolesanywhere-mutation-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+  < rolesanywhere/manifests/validation/rolesanywhere-mutation-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 kubectl --kubeconfig kubeconfig -n rolesanywhere-test get certificate rolesanywhere-test   # generated automatically - see below
 ```
 
@@ -456,7 +350,7 @@ without needing a manual pod restart.
 
 The restricted `envsubst '...'` form (an explicit list of names, not a bare
 `envsubst`) matters here for the same reason it does in
-[vault.md](vault.md#vault-agent-injector-real-sidecar-real-credential_process-rotation):
+[vault/docs/design.md](../../vault/docs/design.md#vault-agent-injector-real-sidecar-real-credential_process-rotation):
 both manifests embed real shell scripts (the initContainer's
 `credential_process` config, the CA issuer's base64 blobs) alongside the
 apply-time placeholders, and an unrestricted `envsubst` would happily
@@ -464,20 +358,12 @@ apply-time placeholders, and an unrestricted `envsubst` would happily
 using whatever (usually empty) value that name happens to have in your
 shell - silently corrupting the script rather than erroring.
 
-**Confirmed live** (2026-08-29, `rke2-lab` in `eu-north-1`): the full chain
-below worked end to end - `get-caller-identity` returning the expected
-assumed-role ARN, scoped S3 access allowed on the Roles Anywhere test
-bucket and denied on the IRSA one, and rotation confirmed via a forced
-cert-manager renewal. Getting there took two fixes beyond the trust policy
-this doc's Terraform ships (both already folded into
-[`rolesanywhere.tf`](../terraform/rolesanywhere.tf) and
-[`rolesanywhere-test.yaml`](../manifests/rolesanywhere-test.yaml), and
-called out inline above): the `x509SAN`/`URI` attribute mapping, and
-`sts:SetSourceIdentity` in the trust policy's actions. Both failures looked
-identical from the outside - the same generic
-`AccessDeniedException: Unable to assume role for <arn>`, with no signal
-pointing at which piece was missing - which is why they're documented as
-prominently as the working configuration itself.
+Confirmed live end to end 2026-08-29, including rotation via a forced
+cert-manager renewal - see
+[worklog.md](worklog.md#2026-08-29--end-to-end-chain-hand-wired-manifest)
+for the two fixes it took to get there (both already folded into
+[`rolesanywhere.tf`](../../terraform/rolesanywhere.tf) and
+[`rolesanywhere-test.yaml`](../manifests/validation/rolesanywhere-test.yaml)).
 
 ## Manual verification
 

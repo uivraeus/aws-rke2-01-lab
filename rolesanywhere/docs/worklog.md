@@ -1,0 +1,143 @@
+# Roles Anywhere track — worklog
+
+Dated entries of what was actually run against a live cluster, pulled out of
+[design.md](design.md) to keep that doc focused on the current design rather than
+the history of getting there.
+
+## 2026-08-29 — end-to-end chain, hand-wired manifest
+
+`rke2-lab` in `eu-north-1`: the full chain worked end to end - `get-caller-identity`
+returning the expected assumed-role ARN, scoped S3 access allowed on the Roles
+Anywhere test bucket and denied on the IRSA one, and rotation confirmed via a forced
+cert-manager renewal. Getting there took two fixes beyond the trust policy this
+doc's Terraform ships (both already folded into
+[`rolesanywhere.tf`](../../terraform/rolesanywhere.tf) and
+[`rolesanywhere-test.yaml`](../manifests/validation/rolesanywhere-test.yaml)): the
+`x509SAN`/`URI` attribute mapping, and `sts:SetSourceIdentity` in the trust
+policy's actions. Both failures looked identical from the outside - the same
+generic `AccessDeniedException: Unable to assume role for <arn>`, with no signal
+pointing at which piece was missing.
+
+## 2026-08-30 — Kyverno GeneratingPolicy/ValidatingPolicy, `rke2-lab` in `eu-north-1`
+
+The full chain - annotate a `ServiceAccount`, `Certificate` appears automatically
+with the correct `workload-id://` URI, the pod's `aws sts get-caller-identity` and
+scoped S3 access work exactly as they did with the hand-written `Certificate`, and
+the `ValidatingPolicy` actually rejects a namespace-mismatched `Certificate` while
+leaving one targeting an unrelated issuer untouched.
+
+Two real bugs surfaced getting there, both fixed in
+[`kyverno-rolesanywhere-policies.yaml`](../manifests/infra/kyverno-rolesanywhere-policies.yaml)
+and explained inline where fixed:
+
+- **CEL's map index operator throws, it doesn't return false.**
+  `object.metadata.annotations['some-key']` errors with `no such key` if the
+  map doesn't have that key at all - `has(object.metadata.annotations)`
+  only confirms the *map itself* exists, not that this specific key does.
+  Every `ServiceAccount` in the cluster without the opt-in annotation
+  (`cert-manager`'s own, `kube-system`'s, ...) made the `matchConditions`
+  error rather than simply not match, spamming failed `UpdateRequest`s. Fix:
+  guard the lookup with `'key' in map` first.
+- **Kyverno's `background-controller` (which runs `generate`) has no
+  built-in permission for arbitrary CRDs.** The `GeneratingPolicy` reported
+  `status.ready: true` - it compiled fine - but every actual generation
+  attempt failed with `certificates.cert-manager.io is forbidden`. Its
+  `ClusterRole` is deliberately empty and aggregates in anything labeled
+  `rbac.kyverno.io/aggregate-to-background-controller: "true"` (see
+  `kubectl get clusterrole kyverno:background-controller -o yaml` - an
+  `aggregationRule`, no `ClusterRoleBinding` to hunt for), so the fix is a
+  small separate `ClusterRole` with that label, not a workaround bolted on
+  elsewhere.
+
+**Cleanup on `ServiceAccount` deletion, confirmed live in a follow-up pass**:
+deleting the annotated `ServiceAccount` needed two separate fixes to fully
+clean up after itself, not one:
+
+- The generated `Certificate` sets `metadata.ownerReferences` pointing at
+  the triggering `ServiceAccount` (`uid`/`name`/`kind`), so ordinary
+  Kubernetes garbage collection deletes it when the `ServiceAccount` is
+  deleted - confirmed live, works because both are always in the same
+  namespace (owner references require that).
+- That alone left the `Secret` cert-manager wrote for the `Certificate`
+  dangling - confirmed live: `ownerReferences` cascades `ServiceAccount` ->
+  `Certificate`, but cert-manager doesn't link `Secret` -> `Certificate` by
+  default (`enableCertificateOwnerRef: false` is the chart default,
+  deliberately - deleting a `Certificate` by itself does *not* delete its
+  Secret unless this is turned on). Fixed by setting
+  `enableCertificateOwnerRef=true` on the `make cert-manager` Helm install
+  (see the `Makefile`'s comment on that target for why this is safe to set
+  cluster-wide, including for `pod-identity-webhook`'s own unrelated
+  Certificate).
+
+With both in place, deleting a `ServiceAccount` now leaves nothing behind -
+confirmed by deleting one and finding neither its `Certificate` nor its
+`Secret` still present a few seconds later.
+
+**A related, non-bug gotcha, corrected after a second, more patient live
+test**: a `Pod` applied *before* its `Certificate`/`Secret` exists sits at
+`Init:0/1` retrying the volume mount (`FailedMount ... secret "..." not
+found`). An earlier version of this doc claimed this needed a manual
+`kubectl delete pod` to clear, based on giving up after only about a minute
+of watching - **that claim was wrong**. Confirmed live with a deliberately
+delayed `Secret` (and no pod deletion at all): kubelet's own volume-mount
+retry loop backs off between repeated failures on the same pod, so the gap
+between attempts grows the longer it's been stuck (observed successive
+`FailedMount` events roughly 5 minutes apart late in the backoff, versus
+seconds apart early on) - but it does keep retrying, and the pod reached
+`Running` on its own within a couple of minutes of the `Secret` actually
+existing, no intervention needed. In practice this window rarely opens at
+all: with the `GeneratingPolicy`'s RBAC correctly in place (as shipped),
+the `Certificate` typically appears within a second or two of the
+`ServiceAccount`, well before a freshly-scheduled pod even attempts its
+first mount.
+
+## 2026-08-31 — Kyverno MutatingPolicy pod wiring, `rke2-lab-01` in `eu-north-1`
+
+The fully automated Pod (`rolesanywhere-mutation-test.yaml` - no hand-written
+initContainer/volumes/env at all) reached `Running` with every field correctly
+injected, `aws sts get-caller-identity` and scoped S3 access worked exactly as
+they do with the hand-wired manifest, and the hand-wired manifest itself still
+works completely unaffected when applied on its own (no double-injection, no
+interference - confirmed by checking it still has exactly one
+`fetch-signing-helper` initContainer and exactly its own three volumes, not two
+of each).
+
+Getting there took three real, sequential CEL/Kubernetes-API discoveries, each
+one only found by an actual `kubectl apply`:
+
+1. **`ApplyConfiguration` cannot touch "atomic" fields at all** - a
+   Kubernetes API-level restriction, not a Kyverno bug. A container's
+   `command` (`[]string`) is one; the first draft tried to set it while
+   constructing a brand-new `initContainer` via `patchType:
+   ApplyConfiguration`, and the API server rejected the whole `Pod` outright:
+   `may not mutate atomic arrays, maps or structs: .spec.initContainers[0].command`.
+   Fixed by switching to `patchType: JSONPatch` instead, whose `value` is
+   plain JSON with no such restriction.
+2. **CEL map/list literals are statically homogeneous - one type for every
+   value - unlike JSON.** `{"name": "x", "readOnly": true}` (a string value
+   next to a bool one) doesn't type-check on its own, and wrapping the
+   *whole* literal in `dyn(...)` doesn't fix it - CEL infers a literal's
+   type from its own contents before an outer `dyn()` ever applies. What
+   actually works: `dyn(...)` around every individual *value* inside a
+   heterogeneous map, so each field is independently dyn-typed rather than
+   forcing one concrete type across the whole thing. Needed far more
+   pervasively than expected - nearly every value literal in the file.
+3. **CEL has no map-merge operator at all.** The natural-looking fix for
+   "add fields to an existing container without losing the rest of it" -
+   `c + dyn({"volumeMounts": ..., "env": ...})` - passed type-checking
+   (`dyn` defers everything to runtime) but failed at actual mutation time
+   with `no such overload: _+_`: `+` is defined for
+   numbers/strings/bytes/lists in CEL, never for two maps, dyn-typed or
+   not. Fixed properly, not worked around: `object.spec.containers.indexOf(c)`
+   builds one `JSONPatch` per container per field
+   (`/spec/containers/<index>/volumeMounts`, `.../env`), each `add`
+   replacing only that one list field with `<existing entries> + <new
+   ones>` (list concatenation, which *does* work). No patch path ever
+   references `image`/`command`/`ports`/`resources`/anything else, so it's
+   structurally impossible for this approach to drop them - confirmed live
+   by checking the mutated `aws-cli` container kept its own `command:
+   [sleep, infinity]` and its own `TEST_BUCKET_NAME` env var exactly as
+   written, alongside the injected ones.
+
+See [`kyverno-rolesanywhere-mutation.yaml`](../manifests/infra/kyverno-rolesanywhere-mutation.yaml)'s
+own comments for all three, inline at the fix.

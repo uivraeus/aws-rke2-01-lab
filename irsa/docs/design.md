@@ -1,6 +1,6 @@
 # IRSA (IAM Roles for Service Accounts)
 
-Part of this repo's exploration of bridging RKE2 workload identity into AWS IAM/STS — see the [main README](../README.md) for cluster prerequisites and bootstrap steps.
+Part of this repo's exploration of bridging RKE2 workload identity into AWS IAM/STS — see the [main README](../../README.md) for cluster prerequisites and bootstrap steps.
 
 Terraform also provisions everything needed for IRSA against this cluster,
 even though its control plane isn't publicly reachable - AWS STS needs to
@@ -37,7 +37,7 @@ make sync-oidc
 
 ## Manual verification (no webhook)
 
-[manifests/irsa-test.yaml](../manifests/irsa-test.yaml) creates a Namespace,
+[irsa/manifests/validation/irsa-test.yaml](../manifests/validation/irsa-test.yaml) creates a Namespace,
 ServiceAccount, and an aws-cli Pod. No pod-identity webhook is installed at
 this stage, so the manifest does by hand what the webhook would normally
 inject automatically: a projected service-account token for the
@@ -53,7 +53,7 @@ default credential chain picks it up.
    export IRSA_ROLE_ARN=$(terraform -chdir=terraform output -raw irsa_role_arn)
    export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw irsa_test_bucket_name)
    export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-   envsubst < manifests/irsa-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+   envsubst < irsa/manifests/validation/irsa-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
    ```
 
 2. Confirm the pod actually assumed the role via
@@ -115,7 +115,7 @@ make pod-identity-webhook
 official Helm chart - since v0.3.0 the webhook dropped its old
 self-provisioned-CSR TLS path (`--in-cluster=true`), so its serving
 certificate now has to come from somewhere else. `make pod-identity-webhook`
-applies [manifests/pod-identity-webhook.yaml](../manifests/pod-identity-webhook.yaml)
+applies [irsa/manifests/infra/pod-identity-webhook.yaml](../manifests/infra/pod-identity-webhook.yaml)
 (adapted from upstream's [`deploy/*.yaml`](https://github.com/aws/amazon-eks-pod-identity-webhook/tree/master/deploy)):
 a self-signed `ClusterIssuer` +
 `Certificate` for the webhook's own TLS, and the `Deployment`/`Service`/RBAC/
@@ -129,7 +129,7 @@ aren't stuck with EKS-branded annotations) and `--token-mount-path` to match
 (cosmetic only - the AWS SDK just reads `AWS_WEB_IDENTITY_TOKEN_FILE`,
 wherever the webhook points it).
 
-[manifests/irsa-webhook-test.yaml](../manifests/irsa-webhook-test.yaml) is
+[irsa/manifests/validation/irsa-webhook-test.yaml](../manifests/validation/irsa-webhook-test.yaml) is
 self-contained and mutually exclusive with `irsa-test.yaml` above - both
 create identically-named `Namespace`/`ServiceAccount`/`Pod` objects (required
 to match the IAM role's trust policy condition), demonstrating the same
@@ -143,11 +143,11 @@ tear it down first: `kubectl --kubeconfig kubeconfig delete namespace irsa-test`
    export IRSA_ROLE_ARN=$(terraform -chdir=terraform output -raw irsa_role_arn)
    export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw irsa_test_bucket_name)
    export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-   envsubst < manifests/irsa-webhook-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+   envsubst < irsa/manifests/validation/irsa-webhook-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
    ```
 
 2. Confirm the webhook actually mutated the pod - **nothing in
-   [manifests/irsa-webhook-test.yaml](../manifests/irsa-webhook-test.yaml) sets
+   [irsa/manifests/validation/irsa-webhook-test.yaml](../manifests/validation/irsa-webhook-test.yaml) sets
    these**, unlike the manual manifest's pod spec:
 
    ```sh

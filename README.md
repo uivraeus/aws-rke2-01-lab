@@ -101,14 +101,14 @@ Identity" defaults apply for free. Each variant below is a self-contained,
 independent exploration of getting pods scoped AWS credentials anyway - pick
 the one you care about and follow it end to end without needing the others:
 
-- **[IRSA](docs/irsa.md)** (`terraform/irsa.tf` + the
+- **[IRSA](irsa/docs/design.md)** (`terraform/irsa.tf` + the
   amazon-eks-pod-identity-webhook) - AWS STS federates directly against the
   cluster's own (self-hosted) OIDC issuer.
-- **[Vault-issued AWS credentials](docs/vault.md)** (`terraform/vault.tf` +
+- **[Vault-issued AWS credentials](vault/docs/design.md)** (`terraform/vault.tf` +
   `terraform-vault/`) - a standalone HashiCorp Vault instance brokers
   credentials instead, using its own AWS identity to assume roles on pods'
   behalf.
-- **[AWS Roles Anywhere](docs/rolesanywhere.md)** (`terraform/rolesanywhere.tf`
+- **[AWS Roles Anywhere](rolesanywhere/docs/design.md)** (`terraform/rolesanywhere.tf`
   + cert-manager) - pods get an X.509 identity from a self-signed CA via
   cert-manager, and AWS Roles Anywhere brokers credentials by validating
   that certificate against a matching trust anchor, instead of a

@@ -1,6 +1,6 @@
 # Vault-issued AWS credentials
 
-Part of this repo's exploration of bridging RKE2 workload identity into AWS IAM/STS — see the [main README](../README.md) for cluster prerequisites and bootstrap steps.
+Part of this repo's exploration of bridging RKE2 workload identity into AWS IAM/STS — see the [main README](../../README.md) for cluster prerequisites and bootstrap steps.
 
 An independent path for pods to get scoped AWS credentials, evaluated
 alongside IRSA: a standalone HashiCorp Vault instance brokers the
@@ -12,16 +12,16 @@ assuming an IAM role using *Vault's own* AWS identity (its EC2 instance
 profile, via IMDS - never a static access key).
 
 **Entirely opt-in and off by default** - the Vault instance and everything in
-[`terraform/vault.tf`](../terraform/vault.tf) is gated behind `enable_vault`
+[`terraform/vault.tf`](../../terraform/vault.tf) is gated behind `enable_vault`
 (default `false`), so a plain `make bootstrap-k8s`/`terraform apply` with no
 overrides doesn't create any of it. Set `enable_vault = true` in
 `terraform.tfvars` (or `-var enable_vault=true`) before bootstrapping to turn
-it on - see [terraform.tfvars.example](../terraform/terraform.tfvars.example).
+it on - see [terraform.tfvars.example](../../terraform/terraform.tfvars.example).
 It lives in the main `terraform/` root rather than `terraform-vault/` even
 though it's optional - see the "why not `terraform-vault/`" note further
 down for the reasoning.
 
-Extra prerequisites beyond the ones in the [main README](../README.md#prerequisites): **Terraform >= 1.10**
+Extra prerequisites beyond the ones in the [main README](../../README.md#prerequisites): **Terraform >= 1.10**
 (`terraform-vault/`'s AppRole credentials use `ephemeral` variables, a 1.10+
 feature - the main `terraform/` root still only needs >= 1.7), the
 `hashicorp/vault` provider (pulled in automatically by `terraform init`),
@@ -34,7 +34,7 @@ The Ansible/Terraform split follows
 [uivraeus/lab-iac-vault](https://github.com/uivraeus/lab-iac-vault)'s
 `02-tf-heavy` approach: Ansible only does what can't be declarative
 (install, init, unseal, bootstrap a `terraform-operator` AppRole); a second
-Terraform root, [`terraform-vault/`](../terraform-vault/), owns all ongoing
+Terraform root, [`terraform-vault/`](../../terraform-vault/), owns all ongoing
 Vault configuration (the Kubernetes auth method, the AWS secrets engine)
 via the `hashicorp/vault` provider.
 
@@ -61,7 +61,7 @@ What gets provisioned when `enable_vault = true`:
   "file"` persists across restarts on the root volume; the listener runs
   with `tls_disable = 1` (the instance already isn't internet-reachable,
   and this evaluation is about the credential-issuance mechanics, not
-  Vault's own PKI - see [`terraform-vault/`](../terraform-vault/) below for
+  Vault's own PKI - see [`terraform-vault/`](../../terraform-vault/) below for
   what that'd take to add later).
 - **Vault-issued test role** (`vault_test_role_arn` output) - trusts the
   Vault instance's own IAM role via a plain `sts:AssumeRole` (not
@@ -69,7 +69,7 @@ What gets provisioned when `enable_vault = true`:
   test bucket below.
 - **Test bucket** (`vault_test_bucket_name` output) - private bucket used
   purely to prove the Vault credential chain works end to end.
-- **`vault-auth-delegator` ServiceAccount** ([manifests/vault-k8s-auth.yaml](../manifests/vault-k8s-auth.yaml))
+- **`vault-auth-delegator` ServiceAccount** ([vault/manifests/infra/vault-k8s-auth.yaml](../manifests/infra/vault-k8s-auth.yaml))
   - Vault runs outside the cluster, so it can't use an in-cluster identity
   as the Kubernetes auth method's TokenReview caller the way an in-cluster
   Vault would; this ServiceAccount (bound to `system:auth-delegator`) fills
@@ -88,7 +88,7 @@ make bootstrap-vault # everything else - see below
 
 Or, for the whole stack from nothing in one go: `make bootstrap-all`.
 
-`bootstrap-vault` ([scripts/bootstrap-vault.sh](../scripts/bootstrap-vault.sh))
+`bootstrap-vault` ([scripts/bootstrap-vault.sh](../../scripts/bootstrap-vault.sh))
 runs the full sequence: install Vault, `operator init` (+ first unseal),
 create the `terraform-operator` AppRole, apply the `vault-auth-delegator`
 manifest and mint its token, then configure Vault itself (Kubernetes auth
@@ -106,7 +106,7 @@ directly: `jq -r .root_token local/vault-*.json`.
 
 ## Manual verification (no Vault Agent Injector)
 
-[manifests/vault-test.yaml](../manifests/vault-test.yaml) creates a
+[vault/manifests/validation/vault-test.yaml](../manifests/validation/vault-test.yaml) creates a
 Namespace, ServiceAccount, and a pod with an `initContainer` that does by
 hand what a Vault Agent sidecar would normally do automatically: log in via
 the Kubernetes auth method using the pod's own (default) ServiceAccount
@@ -127,7 +127,7 @@ to pick up.
    export VAULT_ADDR="http://$(terraform -chdir=terraform output -raw vault_private_ip):8200"
    export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
    export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-   envsubst < manifests/vault-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+   envsubst < vault/manifests/validation/vault-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
    ```
 
 3. Confirm the pod actually assumed the role via Vault:
@@ -166,7 +166,7 @@ with exactly the intended S3 access, nothing more.
 
 ## Vault Agent Injector (real sidecar, real `credential_process` rotation)
 
-`manifests/vault-test.yaml` above fetches credentials once and writes a
+`vault/manifests/validation/vault-test.yaml` above fetches credentials once and writes a
 static file - proves the mechanics, but structurally can't rotate (most
 AWS SDKs cache a plain `AWS_SHARED_CREDENTIALS_FILE` for the client's
 lifetime and never notice the file changed). Real rotation needs
@@ -178,8 +178,8 @@ Helm chart used for the server) provides. See
 [aws-sdk-credential-caching.md](aws-sdk-credential-caching.md) for
 the research behind that caching claim (per-SDK sources, the
 per-process/long-lived-client nuance) and a live rig
-(`manifests/vault-agent-config-raw.yaml` +
-`manifests/vault-test-rotation-proof.yaml`) that proves it directly: the
+(`vault/manifests/infra/vault-agent-config-raw.yaml` +
+`vault/manifests/validation/vault-test-rotation-proof.yaml`) that proves it directly: the
 `aws` CLI, a long-lived `boto3` session, and a long-lived `aws-sdk-go-v2`
 client all pointed at the same naively-injected file across a real
 rotation.
@@ -200,7 +200,7 @@ Vault can't go lower) keeps leases short so rotation is actually
 observable without a long wait. Raise it back toward AWS's own default
 (3600s) once you're done evaluating rotation itself.
 
-[manifests/vault-test-injector.yaml](../manifests/vault-test-injector.yaml)
+[vault/manifests/validation/vault-test-injector.yaml](../manifests/validation/vault-test-injector.yaml)
 is the same idea as the hand-wired pod, but with **no
 `initContainers`/sidecar in the spec at all** - just two annotations:
 
@@ -214,7 +214,7 @@ container (renders before the app starts) and a long-running `vault-agent`
 sidecar that keeps re-rendering. Everything else - the Consul-Template
 snippet, the Sprig-function workaround, the atomic-write command hook (all
 described below) - lives in
-[manifests/vault-agent-config.yaml](../manifests/vault-agent-config.yaml)
+[vault/manifests/infra/vault-agent-config.yaml](../manifests/infra/vault-agent-config.yaml)
 instead of the pod spec. That's the actual point of `agent-configmap`
 ([annotation reference](https://developer.hashicorp.com/vault/docs/platform/k8s/injector/annotations)):
 an app developer adding these two lines to their own pod never needs to see
@@ -244,10 +244,10 @@ time:
 
 ```sh
 export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
-envsubst '${VAULT_PRIVATE_IP}' < manifests/vault-agent-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+envsubst '${VAULT_PRIVATE_IP}' < vault/manifests/infra/vault-agent-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
 export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
 export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < manifests/vault-test-injector.yaml | kubectl --kubeconfig kubeconfig apply -f -
+envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < vault/manifests/validation/vault-test-injector.yaml | kubectl --kubeconfig kubeconfig apply -f -
 ```
 
 Then the same `aws sts get-caller-identity` check as before
@@ -276,7 +276,7 @@ worked immediately - the actual point of all of this.
 functions registered (bare or `sprig_`-prefixed) - despite general Consul
 Template docs describing `sprig_*`-prefixed functions as available, every
 one tried (`sprig_now`, `sprig_date`, `timeAdd`) errored as undefined
-against this actual cluster. `manifests/vault-agent-config.yaml` works
+against this actual cluster. `vault/manifests/infra/vault-agent-config.yaml` works
 around it: the template renders the `Expiration` as a raw Unix-epoch value
 wrapped in a placeholder, and a post-render `command` hook (a separate
 Vault Agent feature, unrelated to the templating language) converts it to
@@ -312,10 +312,10 @@ path, which is the actual problem this restructuring solves.)
 
 ### Packaged as a Helm chart
 
-[charts/vault-agent-aws-creds](../charts/vault-agent-aws-creds) wraps the exact
+[charts/vault-agent-aws-creds](../../charts/vault-agent-aws-creds) wraps the exact
 same ConfigMap (the HCL/shell content is unchanged, only its packaging is
 different) as a reusable Helm chart, for when hand-editing
-`manifests/vault-agent-config.yaml` and `envsubst`-ing it stops scaling -
+`vault/manifests/infra/vault-agent-config.yaml` and `envsubst`-ing it stops scaling -
 e.g. an app's own chart wanting this as a proper `dependencies:` entry.
 Both approaches are kept in this repo side by side: the raw manifest above
 as the from-scratch reference (worth reading once to see exactly what an
@@ -377,7 +377,7 @@ helm upgrade --install vault-agent-aws-creds-config charts/vault-agent-aws-creds
   --set awsSecretsRole=vault-test
 ```
 
-then apply `manifests/vault-test-injector.yaml` as before - the pod's two
+then apply `vault/manifests/validation/vault-test-injector.yaml` as before - the pod's two
 annotations don't change; `agent-configmap` just points at whichever
 ConfigMap name the chart rendered. That's `configMapName` above, set
 explicitly to match the name `vault-test-injector.yaml` already has
@@ -386,14 +386,8 @@ defaults to `<release-name>-vault-agent-aws-creds-config` instead (so with
 the release name used here, the unset default would double up to
 `vault-agent-aws-creds-config-vault-agent-aws-creds-config`).
 
-**Confirmed live** (2026-08-22, same cluster/Vault version as the
-hand-authored path above): chart-rendered credentials pass
-`aws sts get-caller-identity`, S3 access is scoped correctly in both
-directions (allowed on the vault-test bucket, denied on the IRSA one), and
-automatic rotation works identically to the hand-authored version -
-`AccessKeyId` changes after the lease TTL with the pod's restart count
-staying at `0`. Re-verified with `vaultAddress` unset entirely (the
-default): same result, `VAULT_ADDR` supplied by the injector alone.
+Confirmed live 2026-08-22, including with `vaultAddress` left unset - see
+[worklog.md](worklog.md#2026-08-22--helm-chart-packaging-same-result-as-the-hand-authored-configmap).
 
 ## Kyverno + vault-aws-credential-helper (no Vault Agent Injector)
 
@@ -418,7 +412,7 @@ purposes - no ConfigMap-vs-native-annotation dilemma, no Sprig date-formatting
 workaround, no atomic-write dance. The tool's image ships only the binary, no
 `aws/config` file (`credential_process` is only ever honored from a real file on
 disk, a deliberate AWS SDK security boundary - no env-var equivalent exists), so
-something still has to put that file on disk. [`manifests/kyverno-vault-cred-helper-mutation.yaml`](../manifests/kyverno-vault-cred-helper-mutation.yaml)
+something still has to put that file on disk. [`vault/manifests/infra/kyverno-vault-cred-helper-mutation.yaml`](../manifests/infra/kyverno-vault-cred-helper-mutation.yaml)
 is a Kyverno `MutatingPolicy` that supplies everything a pod needs, purely from two
 opt-in annotations on its ServiceAccount:
 
@@ -430,7 +424,7 @@ rke2-lab.internal/vault-aws-secrets-path: "aws/creds/<role>"
 `VAULT_ROLE` is derived from the ServiceAccount's own name (matches this repo's
 convention of naming `terraform-vault`'s Kubernetes auth role identically to the
 ServiceAccount using it), not a third annotation. `VAULT_ADDR` comes from the
-`kyverno/cluster-config` ConfigMap ([`manifests/kyverno-config.yaml`](../manifests/kyverno-config.yaml),
+`kyverno/cluster-config` ConfigMap ([`shared/manifests/kyverno-config.yaml`](../../shared/manifests/kyverno-config.yaml),
 shared with the Roles Anywhere Kyverno policies) - one Vault instance per cluster, so
 it's a cluster-wide constant rather than something that varies per app.
 
@@ -444,18 +438,18 @@ every container. **Deliberately not a ConfigMap generated via a Kyverno
 `GeneratingPolicy`**: that would need either a manual per-namespace install (defeats
 the point of automating this at all) or a generate-and-clone-to-every-namespace
 policy needing its own background-controller RBAC grant - the same question
-[`manifests/kyverno-rolesanywhere-policies.yaml`](../manifests/kyverno-rolesanywhere-policies.yaml)
+[`rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml`](../../rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml)
 had to answer for cert-manager `Certificate`s. An init-container writing to an
 `emptyDir` is pure admission-time JSONPatch - Kyverno only reshapes the incoming Pod
 object, creates nothing separately, and needs no extra RBAC at all (confirmed live:
 the policy reports `RBACPermissionsGranted: True` out of the box).
 
 Apply once (after `make kyverno`), then try the self-sufficient test pod -
-[`manifests/vault-cred-helper-test.yaml`](../manifests/vault-cred-helper-test.yaml)
+[`vault/manifests/validation/vault-cred-helper-test.yaml`](../manifests/validation/vault-cred-helper-test.yaml)
 creates its own Namespace/ServiceAccount (with the two opt-in annotations already on
 it) and a Pod that carries no Vault-related fields at all, everything comes from the
 annotations. It declares the same `vault-test` Namespace/ServiceAccount as
-[`manifests/vault-test.yaml`](../manifests/vault-test.yaml) (required - see that
+[`vault/manifests/validation/vault-test.yaml`](../manifests/validation/vault-test.yaml) (required - see that
 file's own header comment on why the name can't differ) - apply one demo or the
 other, not both at once:
 
@@ -466,11 +460,11 @@ export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw r
 export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
 export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
 envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${AWS_REGION} ${VAULT_ADDR}' \
-  < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
-kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-vault-cred-helper-mutation.yaml
+  < shared/manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+kubectl --kubeconfig kubeconfig apply -f vault/manifests/infra/kyverno-vault-cred-helper-mutation.yaml
 
 export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
-envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < manifests/vault-cred-helper-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < vault/manifests/validation/vault-cred-helper-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 kubectl --kubeconfig kubeconfig -n vault-test exec vault-cred-helper-test -c aws-cli -- aws sts get-caller-identity
 ```
 
@@ -480,13 +474,8 @@ directly - no workload-controller indirection needed, and none of the
 webhook-ordering/reinvocation concerns that come up when a second, independent
 mutating webhook (like the Vault Agent Injector's) is also in play.
 
-**Confirmed live** (2026-09-05): a plain Pod, with zero Vault-related annotations,
-volumes, or env vars of its own, carrying only `serviceAccountName: vault-test`
-against a ServiceAccount holding the two opt-in annotations, comes up `Running`
-with everything correctly injected - `aws sts get-caller-identity` succeeds, and S3
-scoping is correct in both directions (allowed on the vault-test bucket, denied on
-the IRSA one). No Vault Agent Injector Helm release is installed on the cluster at
-all for this to work.
+Confirmed live 2026-09-05 - see
+[worklog.md](worklog.md#2026-09-05--kyverno--vault-aws-credential-helper-no-vault-agent-injector-at-all).
 
 ## Not yet done
 

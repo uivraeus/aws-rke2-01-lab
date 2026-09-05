@@ -3,7 +3,7 @@
 # Anywhere authenticates callers via X.509 client certificates against a registered CA
 # ("Trust Anchor"), not a Kubernetes-native token - so cert-manager (already installed via
 # `make cert-manager` for the IRSA webhook) is the bridge that hands pods an X.509 identity
-# in the first place. See docs/rolesanywhere.md for the full write-up, including the
+# in the first place. See rolesanywhere/docs/design.md for the full write-up, including the
 # workload-id:// URI SAN convention used to map a certificate to an IAM role.
 #
 # Entirely optional - gated behind var.enable_rolesanywhere (default false), matching
@@ -12,7 +12,7 @@
 
 # --- Self-signed root CA, registered directly with AWS as the Trust Anchor's certificate
 # bundle. The same cert+key pair is also handed to cert-manager (via
-# manifests/rolesanywhere-ca-issuer.yaml, applied separately - see that file) so it can sign
+# rolesanywhere/manifests/infra/rolesanywhere-ca-issuer.yaml, applied separately - see that file) so it can sign
 # leaf certificates that AWS will actually trust. A self-signed CA (free) is used instead of
 # AWS Private CA (~$400/mo minimum) - wildly disproportionate for a throwaway lab, matching
 # this repo's existing cost-consciousness (see Vault's tls_disable = 1).
@@ -83,7 +83,7 @@ resource "aws_rolesanywhere_profile" "cluster" {
 # (the CloudFormation-Cloud-Control-API-generated provider) already has it natively. Without
 # this, every Roles Anywhere session fails with a generic AccessDeniedException regardless
 # of how correct the trust policy's condition is - the certificate's SAN is never turned
-# into a principal tag for that condition to match against (see docs/rolesanywhere.md).
+# into a principal tag for that condition to match against (see rolesanywhere/docs/design.md).
 #
 # Tracked upstream: https://github.com/hashicorp/terraform-provider-aws/issues/48211 - an
 # implementation already exists (https://github.com/hashicorp/terraform-provider-aws/pull/48493),
@@ -133,7 +133,7 @@ resource "terraform_data" "rolesanywhere_test_attribute_mapping" {
 # --- IAM role assumable via Roles Anywhere by the verification workload ---
 #
 # Scoped to only the test bucket below, for one specific workload identity - see
-# docs/rolesanywhere.md for the workload-id:// URI SAN convention this condition matches
+# rolesanywhere/docs/design.md for the workload-id:// URI SAN convention this condition matches
 # against (the Roles Anywhere analog of IRSA's `sub` claim condition in irsa.tf).
 
 locals {

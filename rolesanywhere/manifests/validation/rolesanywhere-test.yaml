@@ -9,10 +9,10 @@
 #
 # The Certificate itself is no longer hand-written here - the ServiceAccount's
 # rke2-lab.internal/rolesanywhere-enabled annotation below triggers
-# manifests/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy to create one
+# rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy to create one
 # automatically, deriving the workload-id:// URI from this ServiceAccount's own
 # namespace/name. Apply kyverno-config.yaml and kyverno-rolesanywhere-policies.yaml first
-# (see docs/rolesanywhere.md's Kyverno section) or the Certificate never appears and the
+# (see rolesanywhere/docs/design.md's Kyverno section) or the Certificate never appears and the
 # Pod below sits waiting on a Secret that doesn't exist.
 #
 # rolesanywhere-test namespace/serviceaccount names below must match
@@ -29,7 +29,7 @@
 #   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw rolesanywhere_test_bucket_name)
 #   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
 #   envsubst '${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME} ${AWS_REGION}' \
-#     < manifests/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#     < rolesanywhere/manifests/validation/rolesanywhere-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 
 apiVersion: v1
 kind: Namespace
@@ -43,11 +43,11 @@ metadata:
   name: rolesanywhere-test
   namespace: rolesanywhere-test
   annotations:
-    # Triggers manifests/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy to create
+    # Triggers rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy to create
     # a matching Certificate automatically (workload-id://.../ns/rolesanywhere-test/sa/rolesanywhere-test,
-    # SPIFFE-shaped but under a custom scheme - see docs/rolesanywhere.md for why not
+    # SPIFFE-shaped but under a custom scheme - see rolesanywhere/docs/design.md for why not
     # literal spiffe://). Reuses this repo's existing custom annotation prefix from the
-    # IRSA pod-identity-webhook (docs/irsa.md) rather than inventing a new one.
+    # IRSA pod-identity-webhook (irsa/docs/design.md) rather than inventing a new one.
     rke2-lab.internal/rolesanywhere-enabled: "true"
 
 ---

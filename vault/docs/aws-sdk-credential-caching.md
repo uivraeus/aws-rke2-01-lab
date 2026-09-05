@@ -1,7 +1,7 @@
 # Why plain file injection can't rotate: AWS SDK/CLI credential-file caching
 
-This traces the assumption behind [docs/vault.md](vault.md)'s "Vault Agent Injector" section
-([`credential_process` rotation](vault.md#vault-agent-injector-real-sidecar-real-credential_process-rotation)):
+This traces the assumption behind [vault/docs/design.md](design.md)'s "Vault Agent Injector" section
+([`credential_process` rotation](design.md#vault-agent-injector-real-sidecar-real-credential_process-rotation)):
 that pointing an app straight at a Vault-Agent-rendered `AWS_SHARED_CREDENTIALS_FILE`
 (no `credential_process`) can't rotate credentials into a running process, because
 "AWS SDKs cache the file for the client's lifetime and never notice it changed."
@@ -57,7 +57,7 @@ that object for the rest of the process's life - which is exactly the shape
 of a real service pod.
 
 This matters for how this repo's other tests are structured: rotation gets
-proven elsewhere in [docs/vault.md](vault.md) via repeated `kubectl exec ... -- aws s3 ls
+proven elsewhere in [vault/docs/design.md](design.md) via repeated `kubectl exec ... -- aws s3 ls
 ...` calls, and each of those is a fresh CLI process. Run that same style of
 check against a naively-injected file (no `credential_process`) and it would
 *appear* to rotate correctly, purely because the CLI re-reads on every
@@ -66,14 +66,14 @@ persistent client held open across a rotation.
 
 ## Live proof: three long-running readers, one rotated file
 
-[`manifests/vault-agent-config-raw.yaml`](../manifests/vault-agent-config-raw.yaml)
+[`vault/manifests/infra/vault-agent-config-raw.yaml`](../manifests/infra/vault-agent-config-raw.yaml)
 reuses the same `vault-test` Kubernetes auth role and `aws/creds/vault-test`
 AWS secrets engine role as the existing injector setup, but renders a plain
 INI `AWS_SHARED_CREDENTIALS_FILE` with no `Expiration` field and no
 `credential_process` layer - the literal naive path this whole evaluation
 moved away from.
 
-[`manifests/vault-test-rotation-proof.yaml`](../manifests/vault-test-rotation-proof.yaml)
+[`vault/manifests/validation/vault-test-rotation-proof.yaml`](../manifests/validation/vault-test-rotation-proof.yaml)
 points three containers at that same file and polls every 30s, logging a
 timestamp plus the last few characters of whichever `AccessKeyId` each reader
 currently believes is current:
@@ -89,7 +89,7 @@ currently believes is current:
 Expected result, based on the research above: after Vault Agent re-renders
 the file with a new lease's `AccessKeyId` (wait out
 `terraform-vault`'s `default_sts_ttl`, same as the `credential_process` proof
-in [docs/vault.md](vault.md) - forced revocation doesn't trigger an early re-fetch for
+in [vault/docs/design.md](design.md) - forced revocation doesn't trigger an early re-fetch for
 non-renewable `assumed_role` credentials, confirmed in that doc's
 "Proving rotation" note), `aws-cli`'s logged key should change on its next
 line while `python-boto3` and `go-sdk` keep logging the pre-rotation key
@@ -100,16 +100,16 @@ just log an old key, they start hard-failing every call.**
 ### Running it
 
 Prerequisite: `vault-test` namespace/`ServiceAccount`/Vault role already
-exist (applied via `manifests/vault-test.yaml` or
-`manifests/vault-test-injector.yaml`), and the injector is installed
+exist (applied via `vault/manifests/validation/vault-test.yaml` or
+`vault/manifests/validation/vault-test-injector.yaml`), and the injector is installed
 (`make injector-vault`).
 
 ```sh
 export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
-envsubst '${VAULT_PRIVATE_IP}' < manifests/vault-agent-config-raw.yaml \
+envsubst '${VAULT_PRIVATE_IP}' < vault/manifests/infra/vault-agent-config-raw.yaml \
   | kubectl --kubeconfig kubeconfig apply -f -
 export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-envsubst '${AWS_REGION}' < manifests/vault-test-rotation-proof.yaml \
+envsubst '${AWS_REGION}' < vault/manifests/validation/vault-test-rotation-proof.yaml \
   | kubectl --kubeconfig kubeconfig apply -f -
 ```
 
@@ -164,5 +164,5 @@ and `sts` packages on startup, which fetches modules from the default Go
 module proxy (`proxy.golang.org`) over HTTPS - a module fetch, not a
 container/OCI registry push, so it doesn't need any registry credentials or
 external image hosting. It does need outbound HTTPS egress from the pod,
-same as the `apk add jq` step in `manifests/vault-test.yaml`'s init
+same as the `apk add jq` step in `vault/manifests/validation/vault-test.yaml`'s init
 container already requires.

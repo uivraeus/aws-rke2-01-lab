@@ -3,8 +3,8 @@
 Deep-dive into which Consul Template functions the Vault Agent Injector
 actually has available, for the exact chart/version this repo pins:
 `hashicorp/vault` Helm chart `0.34.1`, app version (Vault/Vault Agent)
-`2.0.4`. Grew out of the caveat noted in [docs/vault.md](vault.md)'s "Vault Agent
-Injector" section, where `manifests/vault-agent-config.yaml` needed a
+`2.0.4`. Grew out of the caveat noted in [vault/docs/design.md](design.md)'s "Vault Agent
+Injector" section, where `vault/manifests/infra/vault-agent-config.yaml` needed a
 shell-script workaround because the obvious template-only approach
 (`sprig_now`/`sprig_date`/`timeAdd`) errored as undefined against the live
 cluster. This documents *why*, precisely, and what else is or isn't
@@ -66,7 +66,7 @@ simply wrong for this specific dependency graph.
 ## Confirmed live (2026-08-22, against chart 0.34.1 / Vault Agent 2.0.4)
 
 A single scratch probe pod (`vault.hashicorp.com/agent-inject` +
-`agent-configmap`, same mechanism as `manifests/vault-test-injector.yaml`,
+`agent-configmap`, same mechanism as `vault/manifests/validation/vault-test-injector.yaml`,
 deployed into the `vault-test` namespace using its existing `vault-test`
 ServiceAccount/Vault role) rendered this template in one `vault-agent-init`
 pass, no crash-loop:
@@ -90,7 +90,7 @@ sprig_toDate: 2024-01-01 00:00:00 +0000 UTC
 Confirms:
 
 - **Non-date/non-random `sprig_*` functions genuinely work** - the
-  "Sprig functions aren't registered" framing in [docs/vault.md](vault.md)'s
+  "Sprig functions aren't registered" framing in [vault/docs/design.md](design.md)'s
   original caveat was too broad. String/math/list Sprig helpers (`sprig_upper`,
   `sprig_trunc`, `sprig_add1`, `sprig_list`, etc.) are all registered and
   usable; it's specifically the date/time and random ones that are
@@ -123,7 +123,7 @@ Confirms:
   actual reason those two are classified nonhermetic). It renders a valid
   `time.Time`, formatted by Go's default `String()` method, not RFC3339 -
   useful to know, but it does **not** provide a path to replace
-  `manifests/vault-agent-config.yaml`'s epoch-to-RFC3339 shell workaround:
+  `vault/manifests/infra/vault-agent-config.yaml`'s epoch-to-RFC3339 shell workaround:
   the one function that takes a raw Unix-epoch *integer* input
   (`date`/`dateInZone`) is exactly the one that's excluded. `toDate` needs
   the input pre-formatted as a string matching an explicit calendar

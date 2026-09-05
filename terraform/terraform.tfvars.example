@@ -11,12 +11,12 @@ aws_region  = "eu-west-1"
 # irsa_namespace             = "irsa-test"
 # irsa_service_account_name  = "irsa-test"
 
-# Vault evaluation (see docs/vault.md) - off by
+# Vault evaluation (see vault/docs/design.md) - off by
 # default, since it's independent of the base cluster/IRSA:
 # enable_vault         = true
 # vault_instance_type  = "t3.small"
 
-# Roles Anywhere evaluation (see docs/rolesanywhere.md) - off by
+# Roles Anywhere evaluation (see rolesanywhere/docs/design.md) - off by
 # default, since it's independent of the base cluster/IRSA/Vault:
 # enable_rolesanywhere                = true
 # rolesanywhere_namespace             = "rolesanywhere-test"

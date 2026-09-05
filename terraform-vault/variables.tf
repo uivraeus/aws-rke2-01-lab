@@ -27,7 +27,7 @@ variable "kubernetes_ca_cert" {
 }
 
 variable "k8s_token_reviewer_jwt" {
-  description = "Token for the vault-auth-delegator ServiceAccount (system:auth-delegator), used by Vault to call the TokenReview API on every Kubernetes auth login. See manifests/vault-k8s-auth.yaml."
+  description = "Token for the vault-auth-delegator ServiceAccount (system:auth-delegator), used by Vault to call the TokenReview API on every Kubernetes auth login. See vault/manifests/infra/vault-k8s-auth.yaml."
   type        = string
   sensitive   = true
 }

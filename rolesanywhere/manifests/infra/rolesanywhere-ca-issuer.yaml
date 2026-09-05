@@ -1,4 +1,4 @@
-# One-time, cluster-wide prerequisite for the Roles Anywhere path (see docs/rolesanywhere.md).
+# One-time, cluster-wide prerequisite for the Roles Anywhere path (see rolesanywhere/docs/design.md).
 #
 # Loads the same self-signed root CA Terraform registered with AWS as the Roles Anywhere
 # trust anchor (terraform/rolesanywhere.tf) into cert-manager, so it can sign leaf
@@ -22,7 +22,7 @@
 #   export ROLESANYWHERE_CA_CERT_B64=$(terraform -chdir=terraform output -raw rolesanywhere_ca_cert_pem | base64 -w0)
 #   export ROLESANYWHERE_CA_KEY_B64=$(terraform -chdir=terraform output -raw rolesanywhere_ca_key_pem | base64 -w0)
 #   envsubst '${ROLESANYWHERE_CA_CERT_B64} ${ROLESANYWHERE_CA_KEY_B64}' \
-#     < manifests/rolesanywhere-ca-issuer.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#     < rolesanywhere/manifests/infra/rolesanywhere-ca-issuer.yaml | kubectl --kubeconfig kubeconfig apply -f -
 
 apiVersion: v1
 kind: Secret

@@ -6,7 +6,7 @@
 # thing by hand instead, so the aws-cli container's default credential chain
 # picks them up exactly as it would with the webhook.
 #
-# Self-contained and mutually exclusive with manifests/irsa-webhook-test.yaml -
+# Self-contained and mutually exclusive with irsa/manifests/validation/irsa-webhook-test.yaml -
 # that file demonstrates the same end-to-end IRSA chain via the real webhook
 # instead. Both create identically-named Namespace/ServiceAccount/Pod objects
 # (required to match the IAM role's trust policy condition - see below), so
@@ -19,7 +19,7 @@
 #   export IRSA_ROLE_ARN=$(terraform -chdir=terraform output -raw irsa_role_arn)
 #   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw irsa_test_bucket_name)
 #   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-#   envsubst < manifests/irsa-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#   envsubst < irsa/manifests/validation/irsa-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 #
 # irsa-test namespace/serviceaccount names below must match var.irsa_namespace
 # / var.irsa_service_account_name (defaults: "irsa-test" / "irsa-test") -
@@ -38,7 +38,7 @@ metadata:
   namespace: irsa-test
   # No rke2-lab.internal/role-arn annotation here - this ServiceAccount is only
   # ever read by this file's own hand-wired Pod below, never by the webhook (see
-  # manifests/irsa-webhook-test.yaml for that annotation instead).
+  # irsa/manifests/validation/irsa-webhook-test.yaml for that annotation instead).
 
 ---
 apiVersion: v1
