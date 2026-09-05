@@ -1,0 +1,56 @@
+# Self-sufficient live test for manifests/kyverno-vault-cred-helper-mutation.yaml -
+# creates its own Namespace/ServiceAccount/Pod, no dependency on manifests/vault-test.yaml
+# or any separate `kubectl annotate` step. The Pod itself carries NO Vault-related
+# annotations, volumes, or env vars in its own spec at all - everything (the
+# vault-aws-credential-helper image volume, the aws/config-writing init-container, the
+# AWS_CONFIG_FILE/VAULT_ADDR/VAULT_ROLE/VAULT_AWS_SECRETS_PATH env vars) is injected
+# purely from the two opt-in annotations on the ServiceAccount below. See docs/vault.md's
+# "Kyverno + vault-aws-credential-helper" section.
+#
+# Same Namespace/ServiceAccount name ("vault-test") as manifests/vault-test.yaml -
+# required, not a naming choice: terraform-vault's Kubernetes auth role is bound to
+# `bound_service_account_names = ["vault-test"]` in that exact namespace, so this can't
+# be renamed without also changing that Vault-side config. This file and
+# vault-test.yaml are meant to be applied ONE AT A TIME, not both against the same
+# cluster - both declare the same ServiceAccount object with different annotations, so
+# applying both would leave whichever was applied last "owning" that object's
+# annotations (a real kubectl multi-source-apply sharp edge, not a hard conflict/error -
+# just confusing if unnoticed). Delete one demo's resources before applying the other's
+# if you want to switch between them.
+#
+# Apply (open `make tunnel-k8s` in another shell first):
+#
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < manifests/vault-cred-helper-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vault-test
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-test
+  namespace: vault-test
+  annotations:
+    rke2-lab.internal/vault-cred-helper-enabled: "true"
+    rke2-lab.internal/vault-aws-secrets-path: "aws/creds/vault-test"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vault-cred-helper-test
+  namespace: vault-test
+spec:
+  serviceAccountName: vault-test
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}

@@ -20,6 +20,12 @@
 # var.vault_namespace/var.vault_service_account_name in terraform-vault (defaults:
 # "vault-test"/"vault-test") - they're baked into the Kubernetes auth backend role's
 # bound_service_account_names/namespaces.
+#
+# manifests/vault-cred-helper-test.yaml is a self-sufficient, mutually exclusive
+# alternative demo (Kyverno + vault-aws-credential-helper, no Vault Agent Injector) -
+# it declares this same Namespace/ServiceAccount (required, not a naming choice - see
+# its own header comment) with different annotations. Apply one demo or the other,
+# not both at once.
 
 apiVersion: v1
 kind: Namespace
