@@ -450,9 +450,14 @@ had to answer for cert-manager `Certificate`s. An init-container writing to an
 object, creates nothing separately, and needs no extra RBAC at all (confirmed live:
 the policy reports `RBACPermissionsGranted: True` out of the box).
 
-Apply once (after `make kyverno`), then opt a ServiceAccount in and try a plain pod
-against it - [`manifests/vault-cred-helper-test.yaml`](../manifests/vault-cred-helper-test.yaml)
-carries no Vault-related fields at all, everything comes from the annotations:
+Apply once (after `make kyverno`), then try the self-sufficient test pod -
+[`manifests/vault-cred-helper-test.yaml`](../manifests/vault-cred-helper-test.yaml)
+creates its own Namespace/ServiceAccount (with the two opt-in annotations already on
+it) and a Pod that carries no Vault-related fields at all, everything comes from the
+annotations. It declares the same `vault-test` Namespace/ServiceAccount as
+[`manifests/vault-test.yaml`](../manifests/vault-test.yaml) (required - see that
+file's own header comment on why the name can't differ) - apply one demo or the
+other, not both at once:
 
 ```sh
 export VAULT_ADDR="http://$(terraform -chdir=terraform output -raw vault_private_ip):8200"
@@ -463,10 +468,6 @@ export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
 envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${AWS_REGION} ${VAULT_ADDR}' \
   < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
 kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-vault-cred-helper-mutation.yaml
-
-kubectl --kubeconfig kubeconfig -n vault-test annotate serviceaccount vault-test \
-  rke2-lab.internal/vault-cred-helper-enabled=true \
-  rke2-lab.internal/vault-aws-secrets-path=aws/creds/vault-test
 
 export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
 envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < manifests/vault-cred-helper-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
