@@ -7,7 +7,7 @@ than the history of getting there.
 ## 2026-08-22 — Helm chart packaging, same result as the hand-authored ConfigMap
 
 Same cluster/Vault version as the hand-authored [`vault-agent-config.yaml`](../manifests/infra/vault-agent-config.yaml)
-path: chart-rendered credentials (via [`charts/vault-agent-aws-creds`](../../charts/vault-agent-aws-creds))
+path: chart-rendered credentials (via [`vault/charts/vault-agent-aws-creds`](../charts/vault-agent-aws-creds))
 pass `aws sts get-caller-identity`, S3 access is scoped correctly in both directions
 (allowed on the vault-test bucket, denied on the IRSA one), and automatic rotation
 works identically to the hand-authored version - `AccessKeyId` changes after the

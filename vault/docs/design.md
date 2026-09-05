@@ -312,7 +312,7 @@ path, which is the actual problem this restructuring solves.)
 
 ### Packaged as a Helm chart
 
-[charts/vault-agent-aws-creds](../../charts/vault-agent-aws-creds) wraps the exact
+[vault/charts/vault-agent-aws-creds](../charts/vault-agent-aws-creds) wraps the exact
 same ConfigMap (the HCL/shell content is unchanged, only its packaging is
 different) as a reusable Helm chart, for when hand-editing
 `vault/manifests/infra/vault-agent-config.yaml` and `envsubst`-ing it stops scaling -
@@ -359,8 +359,8 @@ Two design points worth knowing before editing the chart:
 Validate offline first - no live cluster or Vault needed:
 
 ```sh
-helm lint charts/vault-agent-aws-creds
-helm template test charts/vault-agent-aws-creds \
+helm lint vault/charts/vault-agent-aws-creds
+helm template test vault/charts/vault-agent-aws-creds \
   --set namespace=vault-test \
   --set vaultAuthRole=vault-test \
   --set awsSecretsRole=vault-test
@@ -369,7 +369,7 @@ helm template test charts/vault-agent-aws-creds \
 Then install it in place of the `envsubst | kubectl apply` step above:
 
 ```sh
-helm upgrade --install vault-agent-aws-creds-config charts/vault-agent-aws-creds \
+helm upgrade --install vault-agent-aws-creds-config vault/charts/vault-agent-aws-creds \
   --kubeconfig kubeconfig \
   --namespace vault-test \
   --set configMapName=vault-agent-aws-creds-config \
