@@ -1,21 +1,10 @@
-# Small config lookup for the Roles Anywhere Kyverno policies (manifests/kyverno-rolesanywhere-*.yaml)
-# and the vault-aws-credential-helper Kyverno policy (vault/manifests/infra/kyverno-vault-cred-helper-mutation.yaml).
-# clusterName builds the same workload-id://<cluster_name>.internal/...  URI
-# terraform/rolesanywhere.tf's local.rolesanywhere_test_workload_uri computes; the
-# rolesanywhere* values are the cluster-wide singletons (one trust anchor/profile per
-# cluster) the MutatingPolicy needs to render aws_signing_helper's credential_process
-# invocation. vaultAddress is the same kind of cluster-wide singleton for the Vault
-# path - one Vault instance per cluster, so it belongs here rather than as a
-# per-ServiceAccount annotation (contrast with vault-aws-secrets-path, which does vary
-# per app and travels via annotation instead, see kyverno-vault-cred-helper-mutation.yaml).
-# None of these can be read from Terraform directly - CEL has no notion of a
-# Terraform output - so they're handed across the same way this repo already bridges
-# Terraform values into other systems (see local_file.ansible_terraform_vars in
-# terraform/main.tf) - a small ConfigMap, applied here via envsubst from the same
-# `terraform output` used everywhere else in these docs. The per-workload IAM role ARN is
-# deliberately NOT here - that varies per ServiceAccount, so it travels via the
-# rke2-lab.internal/rolesanywhere-role-arn annotation instead (see
-# kyverno-rolesanywhere-mutation.yaml).
+# Shared config ConfigMap for the Roles Anywhere Kyverno policies
+# (rolesanywhere/manifests/infra/kyverno-rolesanywhere-*.yaml) and the vault-aws-credential-helper
+# Kyverno policy (vault/manifests/infra/kyverno-vault-cred-helper-mutation.yaml). Holds only
+# cluster-wide singletons (one trust anchor/profile/Vault instance per cluster) - the
+# per-workload IAM role ARN varies per ServiceAccount instead and travels via the
+# rke2-lab.internal/rolesanywhere-role-arn annotation. Bridged in via envsubst from
+# `terraform output` since CEL has no notion of a Terraform output directly.
 #
 # Apply once, before rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml,
 # rolesanywhere/manifests/infra/kyverno-rolesanywhere-mutation.yaml, and

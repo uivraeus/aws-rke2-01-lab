@@ -1,39 +1,16 @@
-# Kyverno automation for the vault-aws-credential-helper path - a MutatingPolicy that
-# injects everything a pod needs to get rotating AWS credentials via Vault, with NO
-# Vault Agent Injector involved at all. See vault/docs/design.md's
-# "Kyverno + vault-aws-credential-helper" section for the full write-up.
+# Kyverno MutatingPolicy for the vault-aws-credential-helper path - injects everything a
+# pod needs to get rotating AWS credentials via Vault, with NO Vault Agent Injector
+# involved. See vault/docs/design.md's "Kyverno + vault-aws-credential-helper" section for
+# the full write-up (why not a ConfigMap/GeneratingPolicy, why this needs no extra RBAC
+# unlike rolesanywhere's GeneratingPolicy).
 #
-# Unlike the Vault Agent Injector path, there's exactly one mutating webhook involved
-# here (Kyverno's own) - so this mutates bare Pods directly, no workload-controller
-# indirection needed, and none of the webhook-ordering concerns that path ran into
-# apply here at all.
-#
-# https://github.com/uivraeus/vault-aws-credential-helper ships only the binary in its
-# image (no aws/config file) - credential_process is only ever read from a real file on
-# disk (a deliberate AWS SDK security boundary, no env-var equivalent), so this policy
-# also injects an init-container that writes a small, fully static aws/config file
-# (identical for every pod - the per-app bits are env-var-driven, not baked into this
-# file) to an emptyDir. Deliberately not a ConfigMap/GeneratingPolicy: that would need
-# either a manual per-namespace install (defeats the point) or a generate+clone-to-every-
-# namespace policy needing its own background-controller RBAC grant (the same question
-# rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml had to answer for cert-manager
-# Certificates) - an init-container writing to an emptyDir is pure admission-time
-# JSONPatch, exactly like this same file's own image-volume/env mutations, and needs no
-# extra RBAC at all.
-#
-# Opt-in via two annotations on the pod's ServiceAccount (same rke2-lab.internal/
-# prefix convention as the other paths in this repo, distinct names so it's clear
-# which Vault path a ServiceAccount is opting into - vault.hashicorp.com/* is the
-# OTHER, Injector-based path's own native annotation namespace, unrelated to this one):
+# Opt-in via two annotations on the pod's ServiceAccount:
 #
 #   rke2-lab.internal/vault-cred-helper-enabled: "true"
 #   rke2-lab.internal/vault-aws-secrets-path: "aws/creds/<role>"
 #
-# VAULT_ROLE is derived from the ServiceAccount's own name (matches this repo's
-# existing convention - terraform-vault's Kubernetes auth role is named identically to
-# the ServiceAccount authenticating with it), not a third annotation. VAULT_ADDR comes
-# from the kyverno/cluster-config ConfigMap (shared/manifests/kyverno-config.yaml) - one Vault
-# instance per cluster, so it's a cluster-wide constant, not per-app.
+# VAULT_ROLE derives from the ServiceAccount's own name, not a third annotation. VAULT_ADDR
+# comes from the kyverno/cluster-config ConfigMap (shared/manifests/kyverno-config.yaml).
 #
 # Apply once, after shared/manifests/kyverno-config.yaml (this reads that ConfigMap):
 #

@@ -1,24 +1,9 @@
-# Live proof for vault/docs/aws-sdk-credential-caching.md: three long-running readers pointed
-# at the same naively-injected AWS_SHARED_CREDENTIALS_FILE (vault/manifests/infra/vault-agent-config-raw.yaml
-# - no credential_process, no Expiration field), polling every 30s and logging the last
-# few characters of whichever AccessKeyId each one currently believes is current:
-#
-#   - aws-cli:     re-invokes the `aws` CLI (a fresh process) every iteration
-#   - python-boto3: creates ONE boto3.Session() at startup, reuses it every iteration
-#   - go-sdk:      creates ONE aws-sdk-go-v2 Config/Client at startup, reuses it every
-#                  iteration - compiled in-cluster via `go run` inside the `golang` image,
-#                  no local Go toolchain and no custom image/registry involved. `go mod
-#                  tidy` fetches aws-sdk-go-v2 from the public Go module proxy
-#                  (proxy.golang.org) over HTTPS at container start - a module fetch, not
-#                  a container/OCI registry push - so it needs outbound HTTPS egress from
-#                  the pod, same as vault/manifests/validation/vault-test.yaml's `apk add jq` init step.
-#
-# Expected result (see vault/docs/aws-sdk-credential-caching.md): after Vault Agent re-renders
-# the file with a new lease (wait out terraform-vault's default_sts_ttl - forced
-# revocation doesn't trigger an early re-fetch for non-renewable assumed_role
-# credentials, per vault/docs/design.md's "Proving rotation" note), aws-cli's logged key changes on
-# its next line while python-boto3 and go-sdk keep logging the pre-rotation key until the
-# pod is restarted.
+# Live proof for vault/docs/aws-sdk-credential-caching.md: three long-running readers
+# (aws-cli, python-boto3, go-sdk - one fresh process per iteration vs. one long-lived
+# client reused across iterations) pointed at the same naively-injected
+# AWS_SHARED_CREDENTIALS_FILE (vault/manifests/infra/vault-agent-config-raw.yaml - no
+# credential_process, no Expiration field), polling every 30s. See that doc for why each
+# behaves differently across a rotation, and expected results.
 #
 # Prerequisite: the "vault-test" namespace/ServiceAccount/Vault role already exist
 # (applied via vault/manifests/validation/vault-test.yaml or vault/manifests/validation/vault-test-injector.yaml), and the

@@ -1,34 +1,11 @@
 # Kyverno automation + misconfiguration guard for the Roles Anywhere path - see
-# rolesanywhere/docs/design.md's Kyverno section for the full write-up. Two independent policies:
-#
-# - GeneratingPolicy: watches ServiceAccounts for an opt-in annotation
-#   (rke2-lab.internal/rolesanywhere-enabled: "true" - reusing this repo's existing custom
-#   annotation prefix from the IRSA pod-identity-webhook, see irsa/docs/design.md) and generates a
-#   cert-manager Certificate for it automatically, deriving the workload-id:// URI from the
-#   ServiceAccount's own namespace/name - the same value a human would otherwise have to
-#   type by hand in two places (the Certificate and the matching IAM trust policy condition
-#   in terraform/rolesanywhere.tf) without any guarantee they stay in sync.
-# - ValidatingPolicy: rejects any Certificate that targets the rolesanywhere-ca ClusterIssuer
-#   but whose spec.uris doesn't match its own namespace - a guard against an accidentally
-#   mistyped or copy-pasted hand-written Certificate, not a defense against a deliberate,
-#   already-RBAC-authorized attempt to bypass it (that operator could just edit or delete
-#   this policy). Deliberately scoped to only Certificates using rolesanywhere-ca, so it
-#   can't interfere with pod-identity-webhook's own, unrelated self-signed cert-manager
-#   Certificate.
-#
-# Both use the current, stable CEL-based GeneratingPolicy/ValidatingPolicy CRDs
-# (policies.kyverno.io/v1), not the older ClusterPolicy generate/validate rule style -
-# ClusterPolicy was deprecated in Kyverno 1.17 (Feb 2026) with removal planned for 1.20
-# (Oct 2026).
-#
-# Confirmed live end to end (2026-08-30, rke2-lab in eu-north-1): the resource.Get(...)
-# ConfigMap lookup and the generate template's (( ... )) interpolation syntax both worked
-# exactly as drafted. Two real bugs did surface, both fixed below and explained inline where
-# fixed: a CEL map-key-lookup gotcha in the GeneratingPolicy's matchConditions, and a missing
-# RBAC grant for Kyverno's background-controller. See rolesanywhere/docs/design.md's Kyverno section
-# for the full writeup, including a pod/Certificate application-order gotcha this surfaced
-# that isn't a bug in this file (a Pod applied before its Certificate/Secret exists gets
-# stuck retrying a volume mount and needs a delete+recreate, not a self-heal).
+# rolesanywhere/docs/design.md's "Automation and a misconfiguration guard" section for the
+# full write-up. Two independent policies: a GeneratingPolicy that creates a cert-manager
+# Certificate from an opt-in ServiceAccount annotation (deriving the workload-id:// URI so
+# it can't drift from a hand-typed one), and a ValidatingPolicy that rejects a
+# namespace-mismatched Certificate targeting the rolesanywhere-ca ClusterIssuer. Both use
+# the current CEL-based policies.kyverno.io/v1 CRDs, not the deprecated ClusterPolicy
+# generate/validate style.
 #
 # Apply once, after shared/manifests/kyverno-config.yaml (this reads that ConfigMap):
 #
@@ -36,15 +13,11 @@
 
 ---
 # Kyverno's background-controller (which runs `generate` rules) has no built-in permission
-# to create arbitrary CRD-backed resources like cert-manager's Certificate - confirmed live,
-# the GeneratingPolicy below reported `status.ready: true` (it compiled fine) but every
-# actual generation attempt failed with `certificates.cert-manager.io is forbidden: User
-# "system:serviceaccount:kyverno:kyverno-background-controller" cannot create resource
-# "certificates"...`. Kyverno's own background-controller ClusterRole is empty by design and
+# to create arbitrary CRD-backed resources - its own ClusterRole is empty by design and
 # aggregates in anything labeled rbac.kyverno.io/aggregate-to-background-controller: "true"
-# (see `kubectl get clusterrole kyverno:background-controller -o yaml` - it's an
-# aggregationRule, no ClusterRoleBinding to edit) - this is exactly that extension point,
-# not a workaround bolted on separately.
+# (an aggregationRule, not a ClusterRoleBinding to edit) - this is that extension point for
+# cert-manager's Certificate. See rolesanywhere/docs/worklog.md's 2026-08-30 entry for how
+# this was found (a GeneratingPolicy that reports status.ready: true can still fail RBAC).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -63,11 +36,9 @@ metadata:
   name: rolesanywhere-generate-certificate
 spec:
   evaluation:
-    # Per Kyverno's own docs, this alone ("Kyverno's internal tracking", not native K8s
-    # ownership) likely already deletes the generated Certificate when the ServiceAccount
-    # is - not live-isolated from the ownerReferences below to confirm which one is doing
-    # the work. Keeping ownerReferences anyway: native GC still works if Kyverno itself is
-    # down at the moment of deletion, and it's visible via kubectl describe.
+    # Per Kyverno's own docs, this alone ("Kyverno's internal tracking") likely already
+    # deletes the generated Certificate when the ServiceAccount is - ownerReferences below
+    # kept anyway so native GC still works if Kyverno itself is down at deletion time.
     synchronize:
       enabled: true
   matchConstraints:
@@ -78,11 +49,8 @@ spec:
         resources: ['serviceaccounts']
   matchConditions:
     # CEL's map index operator (annotations['key']) throws "no such key" rather than
-    # returning false/null when the key is absent - confirmed live: this matchCondition
-    # errored on every ServiceAccount that simply doesn't have this annotation at all
-    # (cert-manager's own SAs, kube-system's, etc.), not just skip them. has() only
-    # confirms the annotations map itself exists, not that this specific key is in it - the
-    # `in` operator is what actually guards a map-index lookup.
+    # returning false/null when absent - has() only confirms the annotations map itself
+    # exists, not that this key is in it. Guard with `in` before indexing.
     - name: opted-in
       expression: >-
         has(object.metadata.annotations) &&
@@ -109,10 +77,10 @@ spec:
           metadata:
             name: (( variables.saName ))
             namespace: (( variables.saNamespace ))
-            # Deleting the ServiceAccount cascades to delete this Certificate (and the
-            # Secret cert-manager wrote for it) via ordinary Kubernetes garbage collection -
-            # not yet confirmed live as of the first pass of this file (see
-            # rolesanywhere/docs/design.md's Kyverno section).
+            # Deleting the ServiceAccount cascades to delete this Certificate (and its
+            # Secret) via ordinary Kubernetes garbage collection - see
+            # rolesanywhere/docs/worklog.md's 2026-08-30 entry for the two-part cleanup fix
+            # this needed (cert-manager doesn't link Secret -> Certificate by default).
             ownerReferences:
               - apiVersion: v1
                 kind: ServiceAccount

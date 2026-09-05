@@ -43,11 +43,9 @@ metadata:
   name: rolesanywhere-test
   namespace: rolesanywhere-test
   annotations:
-    # Triggers rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy to create
-    # a matching Certificate automatically (workload-id://.../ns/rolesanywhere-test/sa/rolesanywhere-test,
-    # SPIFFE-shaped but under a custom scheme - see rolesanywhere/docs/design.md for why not
-    # literal spiffe://). Reuses this repo's existing custom annotation prefix from the
-    # IRSA pod-identity-webhook (irsa/docs/design.md) rather than inventing a new one.
+    # Triggers rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy
+    # to create a matching Certificate automatically - see rolesanywhere/docs/design.md's
+    # "workload-id://" convention section for the URI shape and why not literal spiffe://.
     rke2-lab.internal/rolesanywhere-enabled: "true"
 
 ---
@@ -59,10 +57,8 @@ metadata:
 spec:
   serviceAccountName: rolesanywhere-test
   initContainers:
-    # No official image ships aws_signing_helper, so it's fetched at pod start, same
-    # pragmatic vendoring-at-apply-time this repo already does elsewhere (e.g. the
-    # pod-identity-webhook manifest adapted from upstream's raw deploy/*.yaml). Pinned to a
-    # specific release - check https://github.com/aws/rolesanywhere-credential-helper/releases
+    # No official image ships aws_signing_helper, so it's fetched at pod start - pinned to a
+    # specific release, check https://github.com/aws/rolesanywhere-credential-helper/releases
     # for newer ones.
     - name: fetch-signing-helper
       image: curlimages/curl:8.11.1

@@ -1,17 +1,10 @@
-# Manual IRSA verification - no pod-identity webhook involved.
+# Manual IRSA verification - no pod-identity webhook involved. Does by hand what the
+# webhook would inject automatically (projected token volume, AWS_ROLE_ARN/
+# AWS_WEB_IDENTITY_TOKEN_FILE) - see irsa/docs/design.md's "Manual verification" section.
 #
-# Normally a webhook (e.g. amazon-eks-pod-identity-webhook) injects the
-# projected token volume and AWS_ROLE_ARN/AWS_WEB_IDENTITY_TOKEN_FILE env vars
-# into any pod using an annotated ServiceAccount. This manifest does the same
-# thing by hand instead, so the aws-cli container's default credential chain
-# picks them up exactly as it would with the webhook.
-#
-# Self-contained and mutually exclusive with irsa/manifests/validation/irsa-webhook-test.yaml -
-# that file demonstrates the same end-to-end IRSA chain via the real webhook
-# instead. Both create identically-named Namespace/ServiceAccount/Pod objects
-# (required to match the IAM role's trust policy condition - see below), so
-# apply only one of the two at a time; switching means deleting this one
-# first (`kubectl delete namespace irsa-test`), not applying both together.
+# Mutually exclusive with irsa/manifests/validation/irsa-webhook-test.yaml - both create
+# identically-named objects, so apply only one at a time; delete
+# `kubectl delete namespace irsa-test` first to switch.
 #
 # Fill in the placeholders below from Terraform, then apply against the
 # cluster (open `make tunnel-k8s` in another shell first):

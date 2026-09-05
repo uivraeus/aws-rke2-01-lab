@@ -1,11 +1,7 @@
 # Self-sufficient live test for vault/manifests/infra/kyverno-vault-cred-helper-mutation.yaml -
-# creates its own Namespace/ServiceAccount/Pod, no dependency on vault/manifests/validation/vault-test.yaml
-# or any separate `kubectl annotate` step. The Pod itself carries NO Vault-related
-# annotations, volumes, or env vars in its own spec at all - everything (the
-# vault-aws-credential-helper image volume, the aws/config-writing init-container, the
-# AWS_CONFIG_FILE/VAULT_ADDR/VAULT_ROLE/VAULT_AWS_SECRETS_PATH env vars) is injected
-# purely from the two opt-in annotations on the ServiceAccount below. See vault/docs/design.md's
-# "Kyverno + vault-aws-credential-helper" section.
+# the Pod itself carries NO Vault-related annotations, volumes, or env vars of its own;
+# everything is injected purely from the two opt-in annotations on the ServiceAccount below.
+# See vault/docs/design.md's "Kyverno + vault-aws-credential-helper" section.
 #
 # Same Namespace/ServiceAccount name ("vault-test") as vault/manifests/validation/vault-test.yaml -
 # required, not a naming choice: terraform-vault's Kubernetes auth role is bound to

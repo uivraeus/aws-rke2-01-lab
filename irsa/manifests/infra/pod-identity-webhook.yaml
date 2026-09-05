@@ -1,28 +1,8 @@
-# aws/amazon-eks-pod-identity-webhook - https://github.com/aws/amazon-eks-pod-identity-webhook
-# Installed from its own upstream deploy/*.yaml manifests (adapted below, from
-# https://github.com/aws/amazon-eks-pod-identity-webhook/tree/master/deploy),
-# since the project ships no Helm chart of its own and isn't in aws/eks-charts
-# (https://github.com/aws/eks-charts) either.
-#
-# cert-manager is a hard prerequisite here, not an option: since v0.3.0 the webhook
-# dropped its old self-provisioned-CSR TLS path (--in-cluster=true), so its serving
-# cert now has to come from somewhere else - the ClusterIssuer/Certificate below,
-# with the MutatingWebhookConfiguration's cert-manager.io/inject-ca-from annotation
-# keeping its caBundle in sync. Install with `make cert-manager` first (or
-# `make pod-identity-webhook`, which depends on it).
-#
-# Two deliberate deviations from upstream's example manifests:
-#   - Everything lives in its own `pod-identity-webhook` namespace instead of
-#     upstream's `default`.
-#   - --annotation-prefix is set to `rke2-lab.internal` instead of the EKS default
-#     `eks.amazonaws.com` - this cluster isn't EKS, and the flag exists precisely so
-#     self-hosted clusters aren't stuck with EKS-branded annotations.
-#     --token-mount-path moves in lockstep for the same reason (cosmetic only - the
-#     AWS SDK just reads AWS_WEB_IDENTITY_TOKEN_FILE, which the webhook itself points
-#     at whatever path this is set to).
-#
-# See irsa/manifests/validation/irsa-test.yaml (the ServiceAccount this webhook now actually acts on)
-# and irsa/manifests/validation/irsa-webhook-test.yaml (the pod proving it).
+# aws/amazon-eks-pod-identity-webhook, adapted from upstream's deploy/*.yaml manifests
+# (no Helm chart of its own upstream). See irsa/docs/design.md's "Automated verification"
+# section for why cert-manager is a hard prerequisite and the two deliberate deviations
+# from upstream (namespace, --annotation-prefix/--token-mount-path). Install via
+# `make pod-identity-webhook` (depends on `make cert-manager`).
 
 apiVersion: v1
 kind: Namespace
