@@ -1,9 +1,14 @@
-# Small config lookup for the Roles Anywhere Kyverno policies (manifests/kyverno-rolesanywhere-*.yaml).
+# Small config lookup for the Roles Anywhere Kyverno policies (manifests/kyverno-rolesanywhere-*.yaml)
+# and the vault-aws-credential-helper Kyverno policy (manifests/kyverno-vault-cred-helper-mutation.yaml).
 # clusterName builds the same workload-id://<cluster_name>.internal/...  URI
 # terraform/rolesanywhere.tf's local.rolesanywhere_test_workload_uri computes; the
 # rolesanywhere* values are the cluster-wide singletons (one trust anchor/profile per
 # cluster) the MutatingPolicy needs to render aws_signing_helper's credential_process
-# invocation. None of these can be read from Terraform directly - CEL has no notion of a
+# invocation. vaultAddress is the same kind of cluster-wide singleton for the Vault
+# path - one Vault instance per cluster, so it belongs here rather than as a
+# per-ServiceAccount annotation (contrast with vault-aws-secrets-path, which does vary
+# per app and travels via annotation instead, see kyverno-vault-cred-helper-mutation.yaml).
+# None of these can be read from Terraform directly - CEL has no notion of a
 # Terraform output - so they're handed across the same way this repo already bridges
 # Terraform values into other systems (see local_file.ansible_terraform_vars in
 # terraform/main.tf) - a small ConfigMap, applied here via envsubst from the same
@@ -12,14 +17,16 @@
 # rke2-lab.internal/rolesanywhere-role-arn annotation instead (see
 # kyverno-rolesanywhere-mutation.yaml).
 #
-# Apply once, before manifests/kyverno-rolesanywhere-policies.yaml and
-# manifests/kyverno-rolesanywhere-mutation.yaml (both read this):
+# Apply once, before manifests/kyverno-rolesanywhere-policies.yaml,
+# manifests/kyverno-rolesanywhere-mutation.yaml, and
+# manifests/kyverno-vault-cred-helper-mutation.yaml (all read this):
 #
 #   export CLUSTER_NAME=$(terraform -chdir=terraform output -raw cluster_name)
 #   export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_trust_anchor_arn)
 #   export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
 #   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-#   envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${AWS_REGION}' \
+#   export VAULT_ADDR="http://$(terraform -chdir=terraform output -raw vault_private_ip):8200"
+#   envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${AWS_REGION} ${VAULT_ADDR}' \
 #     < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
 
 apiVersion: v1
@@ -32,3 +39,4 @@ data:
   rolesanywhereTrustAnchorArn: ${ROLESANYWHERE_TRUST_ANCHOR_ARN}
   rolesanywhereProfileArn: ${ROLESANYWHERE_PROFILE_ARN}
   awsRegion: ${AWS_REGION}
+  vaultAddress: ${VAULT_ADDR}

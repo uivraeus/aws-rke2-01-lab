@@ -1,0 +1,138 @@
+# Kyverno automation for the vault-aws-credential-helper path - a MutatingPolicy that
+# injects everything a pod needs to get rotating AWS credentials via Vault, with NO
+# Vault Agent Injector involved at all. See docs/vault.md's
+# "Kyverno + vault-aws-credential-helper" section for the full write-up.
+#
+# Unlike the Vault Agent Injector path, there's exactly one mutating webhook involved
+# here (Kyverno's own) - so this mutates bare Pods directly, no workload-controller
+# indirection needed, and none of the webhook-ordering concerns that path ran into
+# apply here at all.
+#
+# https://github.com/uivraeus/vault-aws-credential-helper ships only the binary in its
+# image (no aws/config file) - credential_process is only ever read from a real file on
+# disk (a deliberate AWS SDK security boundary, no env-var equivalent), so this policy
+# also injects an init-container that writes a small, fully static aws/config file
+# (identical for every pod - the per-app bits are env-var-driven, not baked into this
+# file) to an emptyDir. Deliberately not a ConfigMap/GeneratingPolicy: that would need
+# either a manual per-namespace install (defeats the point) or a generate+clone-to-every-
+# namespace policy needing its own background-controller RBAC grant (the same question
+# manifests/kyverno-rolesanywhere-policies.yaml had to answer for cert-manager
+# Certificates) - an init-container writing to an emptyDir is pure admission-time
+# JSONPatch, exactly like this same file's own image-volume/env mutations, and needs no
+# extra RBAC at all.
+#
+# Opt-in via two annotations on the pod's ServiceAccount (same rke2-lab.internal/
+# prefix convention as the other paths in this repo, distinct names so it's clear
+# which Vault path a ServiceAccount is opting into - vault.hashicorp.com/* is the
+# OTHER, Injector-based path's own native annotation namespace, unrelated to this one):
+#
+#   rke2-lab.internal/vault-cred-helper-enabled: "true"
+#   rke2-lab.internal/vault-aws-secrets-path: "aws/creds/<role>"
+#
+# VAULT_ROLE is derived from the ServiceAccount's own name (matches this repo's
+# existing convention - terraform-vault's Kubernetes auth role is named identically to
+# the ServiceAccount authenticating with it), not a third annotation. VAULT_ADDR comes
+# from the kyverno/cluster-config ConfigMap (manifests/kyverno-config.yaml) - one Vault
+# instance per cluster, so it's a cluster-wide constant, not per-app.
+#
+# Apply once, after manifests/kyverno-config.yaml (this reads that ConfigMap):
+#
+#   kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-vault-cred-helper-mutation.yaml
+
+apiVersion: policies.kyverno.io/v1
+kind: MutatingPolicy
+metadata:
+  name: vault-cred-helper-mutate-pod
+spec:
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ['']
+        apiVersions: ['v1']
+        operations: ['CREATE']
+        resources: ['pods']
+  variables:
+    - name: saName
+      expression: 'object.spec.?serviceAccountName.orValue("default")'
+    - name: serviceAccount
+      expression: 'resource.Get("v1", "serviceaccounts", object.metadata.namespace, variables.saName)'
+    - name: saAnnotations
+      expression: 'variables.serviceAccount.metadata.?annotations.orValue({})'
+    # `in` before indexing, not bare has()/orValue() - a missing key throws rather than
+    # returning false/null otherwise, same gotcha documented in
+    # kyverno-rolesanywhere-mutation.yaml/kyverno-rolesanywhere-policies.yaml.
+    - name: shouldMutate
+      expression: >-
+        ('rke2-lab.internal/vault-cred-helper-enabled' in variables.saAnnotations) &&
+        variables.saAnnotations['rke2-lab.internal/vault-cred-helper-enabled'] == 'true' &&
+        ('rke2-lab.internal/vault-aws-secrets-path' in variables.saAnnotations)
+    - name: vaultAwsSecretsPath
+      expression: >-
+        ('rke2-lab.internal/vault-aws-secrets-path' in variables.saAnnotations) ?
+        variables.saAnnotations['rke2-lab.internal/vault-aws-secrets-path'] : ''
+    - name: vaultRole
+      expression: 'variables.saName'
+    - name: clusterConfig
+      expression: 'resource.Get("v1", "configmaps", "kyverno", "cluster-config").data'
+    - name: vaultAddress
+      expression: 'variables.clusterConfig.vaultAddress'
+  mutations:
+    # JSONPatch throughout, not ApplyConfiguration - same reasoning as
+    # kyverno-rolesanywhere-mutation.yaml (atomic fields, no CEL map-merge operator).
+    # dyn(...) wraps every value inside a heterogeneous map/list literal, mirroring
+    # that file's own density exactly rather than trying to reason out which specific
+    # spots are strictly required - a wrong guess is just a `kubectl apply` compile
+    # error, never a live pod risk.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          !variables.shouldMutate ? [] :
+          [
+            JSONPatch{
+              op: "add",
+              path: "/spec/volumes",
+              value: object.spec.?volumes.orValue([]) + [
+                {
+                  "name": dyn("vault-cred-helper-bin"),
+                  "image": dyn({"reference": "ghcr.io/uivraeus/vault-aws-credential-helper:0.1.0", "pullPolicy": "IfNotPresent"})
+                },
+                {"name": dyn("aws-config"), "emptyDir": dyn({})}
+              ]
+            },
+            JSONPatch{
+              op: "add",
+              path: "/spec/initContainers",
+              value: [
+                {
+                  "name": dyn("write-aws-config"),
+                  "image": dyn("busybox:stable"),
+                  "command": dyn([
+                    "sh", "-c",
+                    "printf '[default]\\ncredential_process = /tools/vault-aws-credential-helper credential_process\\n' > /aws-config/config"
+                  ]),
+                  "volumeMounts": dyn([
+                    {"name": dyn("aws-config"), "mountPath": dyn("/aws-config")}
+                  ])
+                }
+              ] + object.spec.?initContainers.orValue([])
+            }
+          ] + object.spec.containers.map(c,
+            JSONPatch{
+              op: "add",
+              path: "/spec/containers/" + string(object.spec.containers.indexOf(c)) + "/volumeMounts",
+              value: dyn(c.?volumeMounts.orValue([])) + [
+                {"name": dyn("vault-cred-helper-bin"), "mountPath": dyn("/tools"), "readOnly": dyn(true)},
+                {"name": dyn("aws-config"), "mountPath": dyn("/aws-config"), "readOnly": dyn(true)}
+              ]
+            }
+          ) + object.spec.containers.map(c,
+            JSONPatch{
+              op: "add",
+              path: "/spec/containers/" + string(object.spec.containers.indexOf(c)) + "/env",
+              value: dyn(c.?env.orValue([])) + [
+                {"name": dyn("AWS_CONFIG_FILE"), "value": dyn("/aws-config/config")},
+                {"name": dyn("VAULT_ADDR"), "value": dyn(variables.vaultAddress)},
+                {"name": dyn("VAULT_ROLE"), "value": dyn(variables.vaultRole)},
+                {"name": dyn("VAULT_AWS_SECRETS_PATH"), "value": dyn(variables.vaultAwsSecretsPath)}
+              ]
+            }
+          )

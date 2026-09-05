@@ -1,0 +1,29 @@
+# Live test for manifests/kyverno-vault-cred-helper-mutation.yaml - a bare Pod with
+# NO Vault-related annotations, volumes, or env vars in its own spec at all. Everything
+# (the vault-aws-credential-helper image volume, the aws/config-writing init-container,
+# the AWS_CONFIG_FILE/VAULT_ADDR/VAULT_ROLE/VAULT_AWS_SECRETS_PATH env vars) should be
+# injected purely from the two opt-in annotations already added to the vault-test
+# ServiceAccount. See docs/vault.md's "Kyverno + vault-aws-credential-helper" section.
+#
+# Apply (open `make tunnel-k8s` in another shell first):
+#
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < manifests/vault-cred-helper-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vault-cred-helper-test
+  namespace: vault-test
+spec:
+  serviceAccountName: vault-test
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}

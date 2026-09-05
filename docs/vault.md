@@ -395,6 +395,98 @@ automatic rotation works identically to the hand-authored version -
 staying at `0`. Re-verified with `vaultAddress` unset entirely (the
 default): same result, `VAULT_ADDR` supplied by the injector alone.
 
+## Kyverno + vault-aws-credential-helper (no Vault Agent Injector)
+
+A third way to get pods rotating AWS credentials via Vault, alongside the manual
+initContainer proof above and the Vault Agent Injector below - this one uses no
+Vault Agent, no sidecar, and no ConfigMap at all.
+
+[`vault-aws-credential-helper`](https://github.com/uivraeus/vault-aws-credential-helper)
+is a small, standalone binary (published as
+`ghcr.io/uivraeus/vault-aws-credential-helper`, multi-arch, `FROM scratch`) that *is*
+the `credential_process` target directly: on every invocation it reads the pod's own
+ServiceAccount token, logs into Vault's Kubernetes auth method, reads the AWS secrets
+engine, and prints the `credential_process` JSON contract itself - no proactively-
+refreshing sidecar needed, since `credential_process` is inherently pull-based (the
+AWS SDK/CLI only re-invokes it as the previous credential's `Expiration` approaches).
+Configuration is entirely via env vars: `VAULT_ADDR`, `VAULT_ROLE`,
+`VAULT_AWS_SECRETS_PATH` (all required), plus optional `VAULT_K8S_AUTH_MOUNT`,
+`VAULT_SA_TOKEN_PATH`, `VAULT_TLS_SKIP_VERIFY`, `VAULT_CACERT`, `VAULT_TIMEOUT`.
+
+This removes the entire reason the Vault Agent Injector was needed for this repo's
+purposes - no ConfigMap-vs-native-annotation dilemma, no Sprig date-formatting
+workaround, no atomic-write dance. The tool's image ships only the binary, no
+`aws/config` file (`credential_process` is only ever honored from a real file on
+disk, a deliberate AWS SDK security boundary - no env-var equivalent exists), so
+something still has to put that file on disk. [`manifests/kyverno-vault-cred-helper-mutation.yaml`](../manifests/kyverno-vault-cred-helper-mutation.yaml)
+is a Kyverno `MutatingPolicy` that supplies everything a pod needs, purely from two
+opt-in annotations on its ServiceAccount:
+
+```yaml
+rke2-lab.internal/vault-cred-helper-enabled: "true"
+rke2-lab.internal/vault-aws-secrets-path: "aws/creds/<role>"
+```
+
+`VAULT_ROLE` is derived from the ServiceAccount's own name (matches this repo's
+convention of naming `terraform-vault`'s Kubernetes auth role identically to the
+ServiceAccount using it), not a third annotation. `VAULT_ADDR` comes from the
+`kyverno/cluster-config` ConfigMap ([`manifests/kyverno-config.yaml`](../manifests/kyverno-config.yaml),
+shared with the Roles Anywhere Kyverno policies) - one Vault instance per cluster, so
+it's a cluster-wide constant rather than something that varies per app.
+
+The policy injects, via a single JSONPatch mutation: an `image` volume (Kubernetes'
+native Image Volume feature, same mechanism explored earlier in this doc) mounting
+the helper binary at `/tools`; an `emptyDir` plus an init-container (`busybox:stable`)
+that writes a small, fully static `aws/config` file to it - static because the
+per-app bits are entirely env-var-driven now, nothing needs templating; and the four
+env vars (`AWS_CONFIG_FILE`, `VAULT_ADDR`, `VAULT_ROLE`, `VAULT_AWS_SECRETS_PATH`) on
+every container. **Deliberately not a ConfigMap generated via a Kyverno
+`GeneratingPolicy`**: that would need either a manual per-namespace install (defeats
+the point of automating this at all) or a generate-and-clone-to-every-namespace
+policy needing its own background-controller RBAC grant - the same question
+[`manifests/kyverno-rolesanywhere-policies.yaml`](../manifests/kyverno-rolesanywhere-policies.yaml)
+had to answer for cert-manager `Certificate`s. An init-container writing to an
+`emptyDir` is pure admission-time JSONPatch - Kyverno only reshapes the incoming Pod
+object, creates nothing separately, and needs no extra RBAC at all (confirmed live:
+the policy reports `RBACPermissionsGranted: True` out of the box).
+
+Apply once (after `make kyverno`), then opt a ServiceAccount in and try a plain pod
+against it - [`manifests/vault-cred-helper-test.yaml`](../manifests/vault-cred-helper-test.yaml)
+carries no Vault-related fields at all, everything comes from the annotations:
+
+```sh
+export VAULT_ADDR="http://$(terraform -chdir=terraform output -raw vault_private_ip):8200"
+export CLUSTER_NAME=$(terraform -chdir=terraform output -raw cluster_name)
+export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_trust_anchor_arn)
+export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
+export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${AWS_REGION} ${VAULT_ADDR}' \
+  < manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+kubectl --kubeconfig kubeconfig apply -f manifests/kyverno-vault-cred-helper-mutation.yaml
+
+kubectl --kubeconfig kubeconfig -n vault-test annotate serviceaccount vault-test \
+  rke2-lab.internal/vault-cred-helper-enabled=true \
+  rke2-lab.internal/vault-aws-secrets-path=aws/creds/vault-test
+
+export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
+envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < manifests/vault-cred-helper-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+kubectl --kubeconfig kubeconfig -n vault-test exec vault-cred-helper-test -c aws-cli -- aws sts get-caller-identity
+```
+
+**A real simplification versus the Vault Agent Injector path this replaces**: since
+Kyverno is the *only* mutating webhook involved here, this mutates bare Pods
+directly - no workload-controller indirection needed, and none of the
+webhook-ordering/reinvocation concerns that come up when a second, independent
+mutating webhook (like the Vault Agent Injector's) is also in play.
+
+**Confirmed live** (2026-09-05): a plain Pod, with zero Vault-related annotations,
+volumes, or env vars of its own, carrying only `serviceAccountName: vault-test`
+against a ServiceAccount holding the two opt-in annotations, comes up `Running`
+with everything correctly injected - `aws sts get-caller-identity` succeeds, and S3
+scoping is correct in both directions (allowed on the vault-test bucket, denied on
+the IRSA one). No Vault Agent Injector Helm release is installed on the cluster at
+all for this to work.
+
 ## Not yet done
 
 - **TLS/PKI for Vault's own listener** - currently `tls_disable = 1`
