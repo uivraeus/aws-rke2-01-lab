@@ -224,12 +224,6 @@ replaces the injector's *entire* auto-generated Vault Agent config with a
 hand-written one (`auto_auth`, `sink`, `vault`, `template` stanzas, as two
 full HCL files - `config-init.hcl`/`config.hcl`, picked apart by the
 injector using those exact names, identical except `exit_after_auth`).
-**Confirmed live**: worked on the first attempt once written against
-[HashiCorp's own ConfigMap example](https://developer.hashicorp.com/vault/docs/platform/k8s/injector/examples)
-rather than freehand, using HCL heredoc syntax (`<<EOT ... EOT`) for the
-`contents`/`command` fields specifically to avoid triple-nested quote
-escaping (HCL string quotes containing Go-template quotes containing
-shell-script quotes) - a heredoc needs no escaping for its body text at all.
 
 The ConfigMap must exist in the same namespace as any pod referencing it
 (ConfigMaps aren't cluster-scoped) and must be applied first. Its own HCL
@@ -271,7 +265,7 @@ out the natural TTL confirmed the real behavior: `AccessKeyId` changed
 automatically, pod restart count stayed at `0`, and the new credentials
 worked immediately - the actual point of all of this.
 
-**Vault Agent template caveat, confirmed live**: this Vault Agent build
+**Vault Agent template caveat** (confirmed live): this Vault Agent build
 (chart `hashicorp/vault` 0.34.1, app version 2.0.4) has no date-formatting
 functions registered (bare or `sprig_`-prefixed) - despite general Consul
 Template docs describing `sprig_*`-prefixed functions as available, every
@@ -292,7 +286,7 @@ every date/time and random function - non-date Sprig functions like
 (`env`/`mustEnv`/`envOrDefault` included), confirmed live against the same
 chart/version.
 
-**Atomicity of the SDK-facing file, also confirmed live**: rendering the
+**Atomicity of the SDK-facing file** (confirmed live): rendering the
 placeholder directly to the same file the SDK reads would leave a real
 (if brief) window on every rotation where `credential_process` could read
 a half-fixed-up file - Vault Agent's own render is atomic (temp file +
@@ -312,7 +306,7 @@ path, which is the actual problem this restructuring solves.)
 
 ### Packaged as a Helm chart
 
-[vault/charts/vault-agent-aws-creds](../charts/vault-agent-aws-creds) wraps the exact
+[vault/charts/vault-agent-aws-creds](../charts/vault-agent-aws-creds/Chart.yaml) wraps the exact
 same ConfigMap (the HCL/shell content is unchanged, only its packaging is
 different) as a reusable Helm chart, for when hand-editing
 `vault/manifests/infra/vault-agent-config.yaml` and `envsubst`-ing it stops scaling -
@@ -352,7 +346,7 @@ Two design points worth knowing before editing the chart:
   own `global.externalVaultAddr`, set once at `make injector-vault` time) on
   every container it mutates. Vault Agent falls back to that env var when
   the stanza is absent entirely, so the default renders no `vault {}` block
-  at all rather than an empty one - confirmed live. Set `vaultAddress`
+  at all rather than an empty one. Set `vaultAddress`
   explicitly only to pin a release to a different Vault address than the
   injector's own default.
 
@@ -385,9 +379,6 @@ hardcoded in its `agent-configmap` annotation - left unset, the chart
 defaults to `<release-name>-vault-agent-aws-creds-config` instead (so with
 the release name used here, the unset default would double up to
 `vault-agent-aws-creds-config-vault-agent-aws-creds-config`).
-
-Confirmed live 2026-08-22, including with `vaultAddress` left unset - see
-[worklog.md](worklog.md#2026-08-22--helm-chart-packaging-same-result-as-the-hand-authored-configmap).
 
 ## Kyverno + vault-aws-credential-helper (no Vault Agent Injector)
 
@@ -433,20 +424,12 @@ for their own, unrelated cluster-wide values
 meant to be run and evaluated independently, not simultaneously.
 
 The policy injects, via a single JSONPatch mutation: an `image` volume (Kubernetes'
-native Image Volume feature, same mechanism explored earlier in this doc) mounting
+native Image Volume feature) mounting
 the helper binary at `/tools`; an `emptyDir` plus an init-container (`busybox:stable`)
 that writes a small, fully static `aws/config` file to it - static because the
 per-app bits are entirely env-var-driven now, nothing needs templating; and the four
 env vars (`AWS_CONFIG_FILE`, `VAULT_ADDR`, `VAULT_ROLE`, `VAULT_AWS_SECRETS_PATH`) on
-every container. **Deliberately not a ConfigMap generated via a Kyverno
-`GeneratingPolicy`**: that would need either a manual per-namespace install (defeats
-the point of automating this at all) or a generate-and-clone-to-every-namespace
-policy needing its own background-controller RBAC grant - the same question
-[`rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml`](../../rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml)
-had to answer for cert-manager `Certificate`s. An init-container writing to an
-`emptyDir` is pure admission-time JSONPatch - Kyverno only reshapes the incoming Pod
-object, creates nothing separately, and needs no extra RBAC at all (confirmed live:
-the policy reports `RBACPermissionsGranted: True` out of the box).
+every container. 
 
 Apply once (after `make kyverno`), then try the self-sufficient test pod -
 [`vault/manifests/validation/vault-cred-helper-test.yaml`](../manifests/validation/vault-cred-helper-test.yaml)
@@ -469,13 +452,7 @@ kubectl --kubeconfig kubeconfig -n vault-test exec vault-cred-helper-test -c aws
 ```
 
 **A real simplification versus the Vault Agent Injector path this replaces**: since
-Kyverno is the *only* mutating webhook involved here, this mutates bare Pods
-directly - no workload-controller indirection needed, and none of the
-webhook-ordering/reinvocation concerns that come up when a second, independent
-mutating webhook (like the Vault Agent Injector's) is also in play.
-
-Confirmed live 2026-09-05 - see
-[worklog.md](worklog.md#2026-09-05--kyverno--vault-aws-credential-helper-no-vault-agent-injector-at-all).
+it avoids the complex templating, work-arounds for missing sprig functions and extra ConfigMaps/Helm charts. Also, it doesn't require `cat` or similar tool to be available in the application' container image (or mounted separately). 
 
 ## Not yet done
 
