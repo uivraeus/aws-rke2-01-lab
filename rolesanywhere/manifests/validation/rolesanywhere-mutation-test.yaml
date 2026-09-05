@@ -6,7 +6,7 @@
 # first to switch.
 #
 # Fill in the placeholder below from Terraform, then apply (open `make tunnel-k8s` in
-# another shell first) - shared/manifests/kyverno-config.yaml and both
+# another shell first) - rolesanywhere/manifests/infra/kyverno-config.yaml and both
 # rolesanywhere/manifests/infra/kyverno-rolesanywhere-{policies,mutation}.yaml must already
 # be applied:
 #

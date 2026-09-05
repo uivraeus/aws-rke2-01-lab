@@ -7,7 +7,7 @@
 # the current CEL-based policies.kyverno.io/v1 CRDs, not the deprecated ClusterPolicy
 # generate/validate style.
 #
-# Apply once, after shared/manifests/kyverno-config.yaml (this reads that ConfigMap):
+# Apply once, after rolesanywhere/manifests/infra/kyverno-config.yaml (this reads that ConfigMap):
 #
 #   kubectl --kubeconfig kubeconfig apply -f rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml
 

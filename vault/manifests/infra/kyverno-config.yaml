@@ -1,0 +1,23 @@
+# Cluster-wide config ConfigMap for the vault-aws-credential-helper Kyverno policy
+# (vault/manifests/infra/kyverno-vault-cred-helper-mutation.yaml) - one Vault instance per
+# cluster, so its address is a cluster-wide singleton rather than a per-ServiceAccount
+# annotation. Bridged in via envsubst from `terraform output` since CEL has no notion of a
+# Terraform output directly.
+#
+# Same ConfigMap name/namespace (kyverno/cluster-config) as
+# rolesanywhere/manifests/infra/kyverno-config.yaml - each track owns its own copy, not
+# meant to coexist with the other; whichever is applied last wins if both tracks are ever
+# installed on the same cluster at once.
+#
+# Apply once, before vault/manifests/infra/kyverno-vault-cred-helper-mutation.yaml (which reads this):
+#
+#   export VAULT_ADDR="http://$(terraform -chdir=terraform output -raw vault_private_ip):8200"
+#   envsubst '${VAULT_ADDR}' < vault/manifests/infra/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-config
+  namespace: kyverno
+data:
+  vaultAddress: ${VAULT_ADDR}

@@ -424,9 +424,13 @@ rke2-lab.internal/vault-aws-secrets-path: "aws/creds/<role>"
 `VAULT_ROLE` is derived from the ServiceAccount's own name (matches this repo's
 convention of naming `terraform-vault`'s Kubernetes auth role identically to the
 ServiceAccount using it), not a third annotation. `VAULT_ADDR` comes from the
-`kyverno/cluster-config` ConfigMap ([`shared/manifests/kyverno-config.yaml`](../../shared/manifests/kyverno-config.yaml),
-shared with the Roles Anywhere Kyverno policies) - one Vault instance per cluster, so
-it's a cluster-wide constant rather than something that varies per app.
+`kyverno/cluster-config` ConfigMap ([`vault/manifests/infra/kyverno-config.yaml`](../manifests/infra/kyverno-config.yaml))
+- one Vault instance per cluster, so it's a cluster-wide constant rather than something
+that varies per app. Roles Anywhere's Kyverno policies read the same ConfigMap *name*
+for their own, unrelated cluster-wide values
+([`rolesanywhere/manifests/infra/kyverno-config.yaml`](../../rolesanywhere/manifests/infra/kyverno-config.yaml))
+- each track owns its own copy rather than sharing one file, since this repo's tracks are
+meant to be run and evaluated independently, not simultaneously.
 
 The policy injects, via a single JSONPatch mutation: an `image` volume (Kubernetes'
 native Image Volume feature, same mechanism explored earlier in this doc) mounting
@@ -455,15 +459,11 @@ other, not both at once:
 
 ```sh
 export VAULT_ADDR="http://$(terraform -chdir=terraform output -raw vault_private_ip):8200"
-export CLUSTER_NAME=$(terraform -chdir=terraform output -raw cluster_name)
-export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_trust_anchor_arn)
-export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
-export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
-envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${AWS_REGION} ${VAULT_ADDR}' \
-  < shared/manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+envsubst '${VAULT_ADDR}' < vault/manifests/infra/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
 kubectl --kubeconfig kubeconfig apply -f vault/manifests/infra/kyverno-vault-cred-helper-mutation.yaml
 
 export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
+export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
 envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < vault/manifests/validation/vault-cred-helper-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
 kubectl --kubeconfig kubeconfig -n vault-test exec vault-cred-helper-test -c aws-cli -- aws sts get-caller-identity
 ```

@@ -6,7 +6,7 @@
 # "Pod-level wiring" section for the full write-up, including why this needs its own
 # rke2-lab.internal/rolesanywhere-role-arn annotation rather than reusing IRSA's role-arn key.
 #
-# Apply once, after shared/manifests/kyverno-config.yaml (this reads that ConfigMap) and
+# Apply once, after rolesanywhere/manifests/infra/kyverno-config.yaml (this reads that ConfigMap) and
 # rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml (the Certificate this mounts comes from
 # that policy's GeneratingPolicy):
 #

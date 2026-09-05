@@ -201,7 +201,7 @@ has two policies:
   repo's existing custom annotation prefix from the IRSA pod-identity-webhook,
   see [irsa/docs/design.md](../../irsa/docs/design.md)) and generates a matching `Certificate`
   automatically, deriving the `workload-id://` URI from the ServiceAccount's
-  own namespace/name via [`shared/manifests/kyverno-config.yaml`](../../shared/manifests/kyverno-config.yaml)'s
+  own namespace/name via [`rolesanywhere/manifests/infra/kyverno-config.yaml`](../manifests/infra/kyverno-config.yaml)'s
   `cluster-config` `ConfigMap` (a `GeneratingPolicy`'s CEL has no way to read
   a Terraform output directly, so the cluster name is bridged across the
   same way `local_file.ansible_terraform_vars` already bridges other
@@ -321,7 +321,7 @@ export ROLESANYWHERE_TRUST_ANCHOR_ARN=$(terraform -chdir=terraform output -raw r
 export ROLESANYWHERE_PROFILE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_profile_arn)
 export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
 envsubst '${CLUSTER_NAME} ${ROLESANYWHERE_TRUST_ANCHOR_ARN} ${ROLESANYWHERE_PROFILE_ARN} ${AWS_REGION}' \
-  < shared/manifests/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+  < rolesanywhere/manifests/infra/kyverno-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
 kubectl --kubeconfig kubeconfig apply -f rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml
 kubectl --kubeconfig kubeconfig apply -f rolesanywhere/manifests/infra/kyverno-rolesanywhere-mutation.yaml
 kubectl --kubeconfig kubeconfig get generatingpolicy,validatingpolicy,mutatingpolicy   # all three should show a ready/valid status

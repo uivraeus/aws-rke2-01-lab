@@ -10,9 +10,9 @@
 #   rke2-lab.internal/vault-aws-secrets-path: "aws/creds/<role>"
 #
 # VAULT_ROLE derives from the ServiceAccount's own name, not a third annotation. VAULT_ADDR
-# comes from the kyverno/cluster-config ConfigMap (shared/manifests/kyverno-config.yaml).
+# comes from the kyverno/cluster-config ConfigMap (vault/manifests/infra/kyverno-config.yaml).
 #
-# Apply once, after shared/manifests/kyverno-config.yaml (this reads that ConfigMap):
+# Apply once, after vault/manifests/infra/kyverno-config.yaml (this reads that ConfigMap):
 #
 #   kubectl --kubeconfig kubeconfig apply -f vault/manifests/infra/kyverno-vault-cred-helper-mutation.yaml
 

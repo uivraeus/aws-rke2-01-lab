@@ -11,9 +11,10 @@
 # rke2-lab.internal/rolesanywhere-enabled annotation below triggers
 # rolesanywhere/manifests/infra/kyverno-rolesanywhere-policies.yaml's GeneratingPolicy to create one
 # automatically, deriving the workload-id:// URI from this ServiceAccount's own
-# namespace/name. Apply kyverno-config.yaml and kyverno-rolesanywhere-policies.yaml first
-# (see rolesanywhere/docs/design.md's Kyverno section) or the Certificate never appears and the
-# Pod below sits waiting on a Secret that doesn't exist.
+# namespace/name. Apply rolesanywhere/manifests/infra/kyverno-config.yaml and
+# kyverno-rolesanywhere-policies.yaml first (see rolesanywhere/docs/design.md's Kyverno
+# section) or the Certificate never appears and the Pod below sits waiting on a Secret
+# that doesn't exist.
 #
 # rolesanywhere-test namespace/serviceaccount names below must match
 # var.rolesanywhere_namespace/var.rolesanywhere_service_account_name (defaults:
