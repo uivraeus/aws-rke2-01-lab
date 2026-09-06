@@ -1,0 +1,38 @@
+# Vault Agent Injector verification - real sidecar, real credential_process rotation.
+# Contrast with vault/manifests/validation/vault-test.yaml (the phase-1 hand-wired
+# initContainer, no rotation possible). Here there's no initContainer/sidecar in the spec
+# at all - the two annotations below tell the injector (`make injector-vault`) to mutate
+# this pod at admission time. All the actual complexity lives in
+# vault/manifests/infra/vault-agent-config.yaml instead - see that file's header and
+# vault/docs/design.md's "Vault Agent Injector" section for the full reasoning.
+#
+# Fill in the placeholders below from Terraform, then apply (open `make tunnel-k8s` in
+# another shell first) - the ConfigMap must exist before this pod does:
+#
+#   export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
+#   envsubst '${VAULT_PRIVATE_IP}' < vault/manifests/infra/vault-agent-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw vault_test_bucket_name)
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst '${TEST_BUCKET_NAME} ${AWS_REGION}' < vault/manifests/validation/vault-test-injector.yaml | kubectl --kubeconfig kubeconfig apply -f -
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vault-test-injector
+  namespace: vault-test
+  annotations:
+    vault.hashicorp.com/agent-inject: "true"
+    vault.hashicorp.com/agent-configmap: "vault-agent-aws-creds-config"
+spec:
+  serviceAccountName: vault-test
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: AWS_CONFIG_FILE
+          value: /vault/secrets/aws-config
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}

@@ -1,0 +1,89 @@
+# Vault Agent config for vault/docs/aws-sdk-credential-caching.md's rotation-caching proof -
+# deliberately the *naive* path this repo's Vault evaluation moved away from: a plain
+# AWS_SHARED_CREDENTIALS_FILE with no Expiration field and no credential_process layer
+# (contrast with vault/manifests/infra/vault-agent-config.yaml). Reuses the same "vault-test"
+# Kubernetes auth role and AWS secrets engine role - no new Vault/Terraform setup needed,
+# just a different render. Same agent-configmap contract as vault-agent-config.yaml - see
+# that file's header and vault/docs/design.md's "Vault Agent Injector" section.
+#
+# Apply before the pod, with ${VAULT_PRIVATE_IP} substituted:
+#
+#   export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
+#   envsubst '${VAULT_PRIVATE_IP}' < vault/manifests/infra/vault-agent-config-raw.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#
+# Apply before vault/manifests/validation/vault-test-rotation-proof.yaml - see that file's header for the
+# full two-step sequence.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-agent-aws-creds-config-raw
+  namespace: vault-test
+data:
+  config-init.hcl: |
+    exit_after_auth = true
+    pid_file = "/home/vault/.pid"
+
+    auto_auth {
+      method "kubernetes" {
+        config = {
+          role = "vault-test"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/home/vault/.vault-token"
+        }
+      }
+    }
+
+    vault {
+      address = "http://${VAULT_PRIVATE_IP}:8200"
+    }
+
+    template {
+      destination = "/vault/secrets/credentials"
+      contents = <<EOT
+    {{- with secret "aws/creds/vault-test" -}}
+    [default]
+    aws_access_key_id = {{ .Data.access_key }}
+    aws_secret_access_key = {{ .Data.secret_key }}
+    aws_session_token = {{ .Data.security_token }}
+    {{- end }}
+    EOT
+    }
+
+  config.hcl: |
+    exit_after_auth = false
+    pid_file = "/home/vault/.pid"
+
+    auto_auth {
+      method "kubernetes" {
+        config = {
+          role = "vault-test"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/home/vault/.vault-token"
+        }
+      }
+    }
+
+    vault {
+      address = "http://${VAULT_PRIVATE_IP}:8200"
+    }
+
+    template {
+      destination = "/vault/secrets/credentials"
+      contents = <<EOT
+    {{- with secret "aws/creds/vault-test" -}}
+    [default]
+    aws_access_key_id = {{ .Data.access_key }}
+    aws_secret_access_key = {{ .Data.secret_key }}
+    aws_session_token = {{ .Data.security_token }}
+    {{- end }}
+    EOT
+    }

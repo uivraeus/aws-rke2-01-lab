@@ -1,0 +1,57 @@
+# IRSA verification via the real pod-identity webhook - no manual volume/env wiring, just
+# a ServiceAccount annotation. Contrast with irsa/manifests/validation/irsa-test.yaml (the
+# hand-wired pod). Mutually exclusive with it too - both create identically-named objects,
+# so apply only one at a time; delete `kubectl delete namespace irsa-test` first to switch.
+#
+# Fill in the placeholders below from Terraform, then apply (open `make tunnel-k8s`
+# in another shell first) - the webhook must already be installed:
+#
+#   export IRSA_ROLE_ARN=$(terraform -chdir=terraform output -raw irsa_role_arn)
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw irsa_test_bucket_name)
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst < irsa/manifests/validation/irsa-webhook-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#
+# irsa-test namespace/serviceaccount names below must match var.irsa_namespace
+# / var.irsa_service_account_name (defaults: "irsa-test" / "irsa-test") -
+# they're baked into the IAM role's trust policy condition.
+#
+# If AWS_ROLE_ARN/AWS_WEB_IDENTITY_TOKEN_FILE don't show up in the pod's env
+# (`kubectl exec ... -- env | grep AWS_`), the webhook's ServiceAccount informer
+# cache may not have caught up yet - delete and recreate the pod a few seconds
+# later.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: irsa-test
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: irsa-test
+  namespace: irsa-test
+  annotations:
+    # Consumed by the pod-identity webhook (irsa/manifests/infra/pod-identity-webhook.yaml),
+    # which runs with --annotation-prefix=rke2-lab.internal instead of the EKS
+    # default (eks.amazonaws.com) - this cluster isn't EKS, and the annotation key
+    # has to match whatever prefix the webhook was actually started with.
+    rke2-lab.internal/role-arn: ${IRSA_ROLE_ARN}
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: irsa-test
+  namespace: irsa-test
+spec:
+  serviceAccountName: irsa-test
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}

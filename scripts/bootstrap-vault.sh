@@ -36,7 +36,7 @@ echo "==> Applying the vault-auth-delegator ServiceAccount and minting its token
 K8S_TUNNEL_CMD=$(terraform -chdir=terraform output -raw tunnel_command)
 scripts/with-tunnel.sh "$K8S_TUNNEL_CMD" 6443 -- bash -c '
   set -euo pipefail
-  kubectl --kubeconfig kubeconfig apply -f manifests/vault-k8s-auth.yaml
+  kubectl --kubeconfig kubeconfig apply -f vault/manifests/infra/vault-k8s-auth.yaml
   kubectl --kubeconfig kubeconfig -n vault-auth create token vault-auth-delegator --duration=8760h > local/vault-k8s-reviewer.token
 '
 

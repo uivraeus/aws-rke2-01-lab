@@ -160,9 +160,9 @@ injector-vault:
 
 # cert-manager is a hard prerequisite for amazon-eks-pod-identity-webhook
 # (https://github.com/aws/amazon-eks-pod-identity-webhook - see
-# manifests/pod-identity-webhook.yaml) - its own MutatingWebhookConfiguration's
+# irsa/manifests/infra/pod-identity-webhook.yaml) - its own MutatingWebhookConfiguration's
 # caBundle gets populated by cert-manager's CA injector, not by us. It's also the CA
-# cert-manager for the Roles Anywhere path (see docs/rolesanywhere.md).
+# cert-manager for the Roles Anywhere path (see rolesanywhere/docs/design.md).
 #
 # enableCertificateOwnerRef=true (default false - confirmed live) is cluster-wide, so it
 # also applies to pod-identity-webhook's own self-signed TLS Certificate: deleting a
@@ -181,7 +181,7 @@ cert-manager:
 		--set enableCertificateOwnerRef=true \
 		--kubeconfig kubeconfig
 
-# Kyverno - see docs/rolesanywhere.md's Kyverno section for what it's used for here
+# Kyverno - see rolesanywhere/docs/design.md's Kyverno section for what it's used for here
 # (automating Certificate creation and guarding against accidental namespace/SAN
 # mismatches). Independent of cert-manager/pod-identity-webhook - no ordering
 # requirement with those targets.
@@ -193,12 +193,12 @@ kyverno:
 		--namespace kyverno --create-namespace \
 		--kubeconfig kubeconfig
 
-# Installs amazon-eks-pod-identity-webhook from manifests/pod-identity-webhook.yaml -
+# Installs amazon-eks-pod-identity-webhook from irsa/manifests/infra/pod-identity-webhook.yaml -
 # no official Helm chart exists for it (upstream ships plain deploy/*.yaml manifests
 # + a Makefile, and it isn't in aws/eks-charts either), so this repo vendors and
 # adapts those manifests directly instead of depending on an unofficial chart.
 pod-identity-webhook: cert-manager
-	kubectl --kubeconfig kubeconfig apply -f manifests/pod-identity-webhook.yaml
+	kubectl --kubeconfig kubeconfig apply -f irsa/manifests/infra/pod-identity-webhook.yaml
 
 # Restarts rke2-server/rke2-agent and waits for the node(s) to report Ready again.
 #   make restart               # both nodes
@@ -244,14 +244,14 @@ rotate-sa-key: ansible-venv
 
 # Opens an SSM port-forward tunnel so `kubectl --kubeconfig kubeconfig` works from your
 # laptop. Run this in its own shell and leave it running - needed for the manual
-# verification steps in docs/irsa.md and docs/vault.md (the -vault Terraform targets above manage their
+# verification steps in irsa/docs/design.md and vault/docs/design.md (the -vault Terraform targets above manage their
 # own short-lived tunnels and don't need this held open).
 tunnel-k8s:
 	cd $(TF_DIR) && eval $$(terraform output -raw tunnel_command)
 
 # Opens an SSM port-forward tunnel so Vault's API is reachable at localhost:8200. Run
 # this in its own shell and leave it running - only needed for manual verification
-# (e.g. applying manifests/vault-test.yaml); the -vault Terraform targets above manage
+# (e.g. applying vault/manifests/validation/vault-test.yaml); the -vault Terraform targets above manage
 # their own.
 tunnel-vault:
 	cd $(TF_DIR) && eval $$(terraform output -raw vault_tunnel_command)

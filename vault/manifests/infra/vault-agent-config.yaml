@@ -1,0 +1,115 @@
+# Shared Vault Agent config, referenced via vault.hashicorp.com/agent-configmap - see
+# vault/manifests/validation/vault-test-injector.yaml and vault/docs/design.md's "Vault Agent
+# Injector" section for the full mechanism (why agent-configmap over native annotations, the
+# Sprig date-function workaround, the atomic raw-file-then-mv pattern). config-init.hcl/
+# config.hcl are the injector's complete config for both phases, identical except
+# exit_after_auth, based on HashiCorp's own agent-configmap example:
+# https://developer.hashicorp.com/vault/docs/platform/k8s/injector/examples
+#
+# Must live in the same namespace as any pod referencing it. Apply before the pod, with
+# ${VAULT_PRIVATE_IP} substituted:
+#
+#   export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
+#   envsubst '${VAULT_PRIVATE_IP}' < vault/manifests/infra/vault-agent-config.yaml | kubectl --kubeconfig kubeconfig apply -f -
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-agent-aws-creds-config
+  namespace: vault-test
+data:
+  config-init.hcl: |
+    exit_after_auth = true
+    pid_file = "/home/vault/.pid"
+
+    auto_auth {
+      method "kubernetes" {
+        config = {
+          role = "vault-test"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/home/vault/.vault-token"
+        }
+      }
+    }
+
+    vault {
+      address = "http://${VAULT_PRIVATE_IP}:8200"
+    }
+
+    template {
+      destination = "/vault/secrets/aws-creds-raw"
+      contents = <<EOT
+    {{- with secret "aws/creds/vault-test" -}}
+    {
+      "Version": 1,
+      "AccessKeyId": "{{ .Data.access_key }}",
+      "SecretAccessKey": "{{ .Data.secret_key }}",
+      "SessionToken": "{{ .Data.security_token }}",
+      "Expiration": "__EPOCH_{{ add (timestamp "unix" | parseInt) .LeaseDuration }}_EPOCH__"
+    }
+    {{- end }}
+    EOT
+      command = <<EOT
+    sh -c 'epoch=$(grep -o "__EPOCH_[0-9]*_EPOCH__" /vault/secrets/aws-creds-raw | grep -o "[0-9]*"); exp=$(date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ); sed "s/__EPOCH_[0-9]*_EPOCH__/$exp/" /vault/secrets/aws-creds-raw > /vault/secrets/aws-creds.tmp; mv /vault/secrets/aws-creds.tmp /vault/secrets/aws-creds'
+    EOT
+    }
+
+    template {
+      destination = "/vault/secrets/aws-config"
+      contents = <<EOT
+    [default]
+    credential_process = cat /vault/secrets/aws-creds
+    EOT
+    }
+
+  config.hcl: |
+    exit_after_auth = false
+    pid_file = "/home/vault/.pid"
+
+    auto_auth {
+      method "kubernetes" {
+        config = {
+          role = "vault-test"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/home/vault/.vault-token"
+        }
+      }
+    }
+
+    vault {
+      address = "http://${VAULT_PRIVATE_IP}:8200"
+    }
+
+    template {
+      destination = "/vault/secrets/aws-creds-raw"
+      contents = <<EOT
+    {{- with secret "aws/creds/vault-test" -}}
+    {
+      "Version": 1,
+      "AccessKeyId": "{{ .Data.access_key }}",
+      "SecretAccessKey": "{{ .Data.secret_key }}",
+      "SessionToken": "{{ .Data.security_token }}",
+      "Expiration": "__EPOCH_{{ add (timestamp "unix" | parseInt) .LeaseDuration }}_EPOCH__"
+    }
+    {{- end }}
+    EOT
+      command = <<EOT
+    sh -c 'epoch=$(grep -o "__EPOCH_[0-9]*_EPOCH__" /vault/secrets/aws-creds-raw | grep -o "[0-9]*"); exp=$(date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ); sed "s/__EPOCH_[0-9]*_EPOCH__/$exp/" /vault/secrets/aws-creds-raw > /vault/secrets/aws-creds.tmp; mv /vault/secrets/aws-creds.tmp /vault/secrets/aws-creds'
+    EOT
+    }
+
+    template {
+      destination = "/vault/secrets/aws-config"
+      contents = <<EOT
+    [default]
+    credential_process = cat /vault/secrets/aws-creds
+    EOT
+    }

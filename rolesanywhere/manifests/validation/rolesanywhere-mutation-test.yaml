@@ -1,0 +1,54 @@
+# Automated Roles Anywhere verification via the Kyverno MutatingPolicy - just two
+# ServiceAccount annotations, no hand-wired initContainer/volumes/env (same relationship
+# irsa-webhook-test.yaml has to irsa-test.yaml). Mutually exclusive with
+# rolesanywhere/manifests/validation/rolesanywhere-test.yaml - both create identically-named
+# objects, so apply only one at a time; delete `kubectl delete namespace rolesanywhere-test`
+# first to switch.
+#
+# Fill in the placeholder below from Terraform, then apply (open `make tunnel-k8s` in
+# another shell first) - rolesanywhere/manifests/infra/kyverno-config.yaml and both
+# rolesanywhere/manifests/infra/kyverno-rolesanywhere-{policies,mutation}.yaml must already
+# be applied:
+#
+#   export ROLESANYWHERE_ROLE_ARN=$(terraform -chdir=terraform output -raw rolesanywhere_role_arn)
+#   export TEST_BUCKET_NAME=$(terraform -chdir=terraform output -raw rolesanywhere_test_bucket_name)
+#   envsubst '${ROLESANYWHERE_ROLE_ARN} ${TEST_BUCKET_NAME}' \
+#     < rolesanywhere/manifests/validation/rolesanywhere-mutation-test.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#
+# rolesanywhere-test namespace/serviceaccount names below must match
+# var.rolesanywhere_namespace/var.rolesanywhere_service_account_name (defaults:
+# "rolesanywhere-test"/"rolesanywhere-test") - same reason rolesanywhere-test.yaml's do.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rolesanywhere-test
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rolesanywhere-test
+  namespace: rolesanywhere-test
+  annotations:
+    # Triggers the GeneratingPolicy, same as rolesanywhere-test.yaml's ServiceAccount.
+    rke2-lab.internal/rolesanywhere-enabled: "true"
+    # Triggers the MutatingPolicy - deliberately not IRSA's role-arn key (real collision
+    # risk, not a style choice - see rolesanywhere/docs/design.md's "Pod-level wiring" section).
+    rke2-lab.internal/rolesanywhere-role-arn: ${ROLESANYWHERE_ROLE_ARN}
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rolesanywhere-test
+  namespace: rolesanywhere-test
+spec:
+  serviceAccountName: rolesanywhere-test
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sleep", "infinity"]
+      env:
+        - name: TEST_BUCKET_NAME
+          value: ${TEST_BUCKET_NAME}

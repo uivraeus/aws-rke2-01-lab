@@ -4,7 +4,7 @@
 # "Vault-in-cluster" setup it can't use its own in-cluster ServiceAccount as the
 # TokenReview caller. Instead it's handed a standing reviewer JWT
 # (k8s_token_reviewer_jwt, bound to the vault-auth-delegator ServiceAccount / the
-# system:auth-delegator ClusterRole - see manifests/vault-k8s-auth.yaml) and calls
+# system:auth-delegator ClusterRole - see vault/manifests/infra/vault-k8s-auth.yaml) and calls
 # kubernetes_host directly on every login to validate the pod's own token.
 
 resource "vault_auth_backend" "kubernetes" {

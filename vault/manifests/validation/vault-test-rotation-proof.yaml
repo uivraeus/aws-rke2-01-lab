@@ -1,0 +1,170 @@
+# Live proof for vault/docs/aws-sdk-credential-caching.md: three long-running readers
+# (aws-cli, python-boto3, go-sdk - one fresh process per iteration vs. one long-lived
+# client reused across iterations) pointed at the same naively-injected
+# AWS_SHARED_CREDENTIALS_FILE (vault/manifests/infra/vault-agent-config-raw.yaml - no
+# credential_process, no Expiration field), polling every 30s. See that doc for why each
+# behaves differently across a rotation, and expected results.
+#
+# Prerequisite: the "vault-test" namespace/ServiceAccount/Vault role already exist
+# (applied via vault/manifests/validation/vault-test.yaml or vault/manifests/validation/vault-test-injector.yaml), and the
+# injector is installed (`make injector-vault`). Apply the Vault Agent config
+# (vault/manifests/infra/vault-agent-config-raw.yaml) first, same two-step shape as
+# vault/manifests/infra/vault-agent-config.yaml + vault/manifests/validation/vault-test-injector.yaml:
+#
+#   export VAULT_PRIVATE_IP=$(terraform -chdir=terraform output -raw vault_private_ip)
+#   envsubst '${VAULT_PRIVATE_IP}' < vault/manifests/infra/vault-agent-config-raw.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#   export AWS_REGION=$(terraform -chdir=terraform output -raw aws_region)
+#   envsubst '${AWS_REGION}' < vault/manifests/validation/vault-test-rotation-proof.yaml | kubectl --kubeconfig kubeconfig apply -f -
+#
+# Watch all three across a rotation:
+#
+#   kubectl --kubeconfig kubeconfig -n vault-test logs -f vault-test-rotation-proof --all-containers --prefix
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-test-rotation-proof-scripts
+  namespace: vault-test
+data:
+  aws_cli_test.sh: |
+    #!/bin/sh
+    set -eu
+    echo "aws-cli rotation-proof: re-invoking a fresh CLI process every iteration"
+    while true; do
+      now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      tail=$(aws configure list 2>/dev/null | awk '/^access_key/ {print $3}')
+      arn=$(aws sts get-caller-identity --query Arn --output text 2>&1)
+      echo "${now} access_key=${tail} arn=${arn}"
+      sleep 30
+    done
+
+  boto3_test.py: |
+    import boto3
+    import datetime
+    import time
+
+    session = boto3.Session()
+    sts = session.client("sts")
+
+    print("python/boto3 rotation-proof: creating one long-lived Session at startup", flush=True)
+
+    while True:
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            creds = session.get_credentials()
+            tail = creds.access_key[-6:] if creds else "?"
+            identity = sts.get_caller_identity()
+            print(f"{now} access_key=...{tail} arn={identity['Arn']}", flush=True)
+        except Exception as exc:
+            print(f"{now} ERROR: {exc}", flush=True)
+        time.sleep(30)
+
+  go_test.go: |
+    package main
+
+    import (
+        "context"
+        "fmt"
+        "time"
+
+        "github.com/aws/aws-sdk-go-v2/config"
+        "github.com/aws/aws-sdk-go-v2/service/sts"
+    )
+
+    func main() {
+        ctx := context.Background()
+
+        cfg, err := config.LoadDefaultConfig(ctx)
+        if err != nil {
+            panic(err)
+        }
+        client := sts.NewFromConfig(cfg)
+
+        fmt.Println("go/aws-sdk-go-v2 rotation-proof: creating one long-lived Config/Client at startup")
+
+        for {
+            now := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+            creds, err := cfg.Credentials.Retrieve(ctx)
+            if err != nil {
+                fmt.Printf("%s ERROR retrieving credentials: %v\n", now, err)
+                time.Sleep(30 * time.Second)
+                continue
+            }
+            tail := creds.AccessKeyID
+            if len(tail) > 6 {
+                tail = tail[len(tail)-6:]
+            }
+            out, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+            if err != nil {
+                fmt.Printf("%s access_key=...%s ERROR: %v\n", now, tail, err)
+            } else {
+                fmt.Printf("%s access_key=...%s arn=%s\n", now, tail, *out.Arn)
+            }
+            time.Sleep(30 * time.Second)
+        }
+    }
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vault-test-rotation-proof
+  namespace: vault-test
+  annotations:
+    vault.hashicorp.com/agent-inject: "true"
+    vault.hashicorp.com/agent-configmap: "vault-agent-aws-creds-config-raw"
+spec:
+  serviceAccountName: vault-test
+  containers:
+    - name: aws-cli
+      image: public.ecr.aws/aws-cli/aws-cli:latest
+      command: ["sh", "/scripts/aws_cli_test.sh"]
+      env:
+        - name: AWS_SHARED_CREDENTIALS_FILE
+          value: /vault/secrets/credentials
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+
+    - name: python-boto3
+      image: python:3.12-slim
+      command: ["sh", "-c", "pip install --no-cache-dir --quiet boto3 && exec python3 /scripts/boto3_test.py"]
+      env:
+        - name: AWS_SHARED_CREDENTIALS_FILE
+          value: /vault/secrets/credentials
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+
+    - name: go-sdk
+      image: golang:1.25
+      command:
+        - sh
+        - -c
+        - |
+          set -eu
+          mkdir -p /tmp/gotest
+          cp /scripts/go_test.go /tmp/gotest/main.go
+          cd /tmp/gotest
+          go mod init rotationtest >/dev/null
+          go mod tidy
+          exec go run main.go
+      env:
+        - name: AWS_SHARED_CREDENTIALS_FILE
+          value: /vault/secrets/credentials
+        - name: AWS_REGION
+          value: ${AWS_REGION}
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+  volumes:
+    - name: scripts
+      configMap:
+        name: vault-test-rotation-proof-scripts
